@@ -62,7 +62,7 @@ Write-Host "Windows Terminal settings installed at $terminalSettingsDestination"
 # Define where to place Terraform.exe
 $binPath = "$env:USERPROFILE\bin"
 $terraformExe = "$binPath\terraform.exe"
-$terraformUrl = "https://cloud.darthadmin.com/s/yoxSxcWGFDxGFAT/download"
+$terraformUrl = "https://drive.usercontent.google.com/u/0/uc?id=10ppC8c-GCHBXIMm5NupgwGhYfY7qqi2A&export=download"
 
 # Ensure bin folder exists
 if (-not (Test-Path $binPath)) {
