@@ -55,45 +55,4 @@ $terminalSettingsUrl = "https://gist.githubusercontent.com/TheDarthAdmin/40e772c
 Invoke-WebRequest -Uri $terminalSettingsUrl -OutFile $terminalSettingsDestination -UseBasicParsing
 Write-Host "Windows Terminal settings installed at $terminalSettingsDestination" -ForegroundColor Green
 
-# --------------------------------------
-# Setup Terraform in User PATH (persistent) and auto-download if needed
-# --------------------------------------
-
-# Define where to place Terraform.exe
-$binPath = "$env:USERPROFILE\bin"
-$terraformExe = "$binPath\terraform.exe"
-$terraformUrl = "https://drive.usercontent.google.com/u/0/uc?id=10ppC8c-GCHBXIMm5NupgwGhYfY7qqi2A&export=download"
-
-# Ensure bin folder exists
-if (-not (Test-Path $binPath)) {
-    New-Item -ItemType Directory -Path $binPath -Force | Out-Null
-    Write-Host "Created bin folder at: $binPath" -ForegroundColor Green
-}
-
-# Download Terraform.exe if not present
-if (-not (Test-Path $terraformExe)) {
-    Write-Host "Downloading Terraform.exe..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $terraformUrl -OutFile $terraformExe
-    Write-Host "Terraform.exe downloaded to: $terraformExe" -ForegroundColor Green
-}
-
-# Get existing User PATH
-$userPath = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::User)
-
-# If binPath is not already in User PATH, add it
-if ($userPath -notlike "*$binPath*") {
-    $newUserPath = "$binPath;$userPath"
-    [Environment]::SetEnvironmentVariable("PATH", $newUserPath, [EnvironmentVariableTarget]::User)
-    Write-Host "Added bin to User PATH (persistent): $binPath" -ForegroundColor Cyan
-} else {
-    Write-Host "Bin already in User PATH." -ForegroundColor Yellow
-}
-
-# Optional: For current session, also update $env:PATH immediately
-if ($env:PATH -notlike "*$binPath*") {
-    $env:PATH = "$binPath;$env:PATH"
-    Write-Host "Updated PATH for this session as well." -ForegroundColor Cyan
-}
-
-# === Done ===
 Write-Host "Setup complete! Please restart your Terminal." -ForegroundColor Green
