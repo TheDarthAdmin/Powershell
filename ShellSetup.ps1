@@ -15,6 +15,16 @@ foreach ($module in $modules) {
 
 winget install JanDeDobbeleer.OhMyPosh
 
+# Controleer of Hack Nerd Font al is geïnstalleerd
+$fontName = "Hack Nerd Font"
+$installed = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" |
+    Where-Object { $_.PSChildName -like "*$fontName*" }
+
+if ($installed) {
+    Write-Host "ℹ️ $fontName is al geïnstalleerd. Installatie wordt overgeslagen."
+    return
+}
+
 # Installeer Hack Nerd Font met PowerShell
 $fontUrl = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/Hack.zip"
 $zipPath = "$env:TEMP\Hack.zip"
