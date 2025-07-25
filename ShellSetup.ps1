@@ -2,7 +2,6 @@
 Write-Host "Installing PowerShell modules..." -ForegroundColor Cyan
 
 $modules = @(
-    'oh-my-posh',
     'Terminal-Icons',
     'PSReadLine',
     'PowerColorLS'
@@ -14,11 +13,38 @@ foreach ($module in $modules) {
     }
 }
 
-# === Install Bitwarden CLI ===
-if (-not (Get-Command bw -ErrorAction SilentlyContinue)) {
-    Write-Host "Installing Bitwarden CLI..." -ForegroundColor Cyan
-    winget install --id Bitwarden.CLI --silent
+winget install JanDeDobbeleer.OhMyPosh
+
+# Installeer Hack Nerd Font met PowerShell
+$fontUrl = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/Hack.zip"
+$zipPath = "$env:TEMP\Hack.zip"
+$extractPath = "$env:TEMP\HackNF"
+
+# Download het font ZIP-bestand
+Invoke-WebRequest -Uri $fontUrl -OutFile $zipPath
+
+# Uitpakken
+Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+
+# Zoek alle .ttf-bestanden
+$fonts = Get-ChildItem -Path $extractPath -Filter *.ttf -Recurse
+
+# Installeer elk font
+foreach ($font in $fonts) {
+    $fontPath = $font.FullName
+    Copy-Item $fontPath -Destination "$env:WINDIR\Fonts"
+
+    $shellApp = New-Object -ComObject Shell.Application
+    $folder = $shellApp.Namespace(0x14) # Fonts folder
+    $folder.CopyHere($fontPath)
 }
+
+# Opruimen (optioneel)
+Remove-Item $zipPath -Force
+# Remove-Item $extractPath -Recurse -Force
+
+Write-Host "✅ Hack Nerd Font geïnstalleerd."
+
 
 # === Ask user where to store profile ===
 Write-Host "Where do you want to store your PowerShell profile?" -ForegroundColor Cyan
@@ -37,7 +63,7 @@ if ($choice -eq '1') {
 }
 
 # === Install PowerShell Profile ===
-$profileUrl = "https://gist.githubusercontent.com/TheDarthAdmin/e689c86323cc65a767fd0fca68219947/raw/e7530a795c8e230f94188ac23c992b4c3988bcfb/MyPwshProfile.ps1"
+$profileUrl = "https://gist.githubusercontent.com/TheDarthAdmin/e689c86323cc65a767fd0fca68219947/raw/dd54e39dae7e0d35b55f569eb114086ebcd454df/MyPwshProfile.ps1"
 
 # Create PowerShell folder if needed
 $profileFolder = Split-Path $profileDestination -Parent
@@ -55,4 +81,5 @@ $terminalSettingsUrl = "https://gist.githubusercontent.com/TheDarthAdmin/40e772c
 Invoke-WebRequest -Uri $terminalSettingsUrl -OutFile $terminalSettingsDestination -UseBasicParsing
 Write-Host "Windows Terminal settings installed at $terminalSettingsDestination" -ForegroundColor Green
 
+# === Done ===
 Write-Host "Setup complete! Please restart your Terminal." -ForegroundColor Green
