@@ -40,4 +40,4 @@ This PowerShell profile enhances your shell with:
 
 Or install it directly via PowerShell:
 ```powershell
-irm "https://gist.githubusercontent.com/TheDarthAdmin/b6c4b95f79e45b3f6481f5ab2f7cb0a0/raw/e2e705682cbb568d8035d40d22c97cdc7744c1c1/ShellSetup.ps1" |iex
+irm "https://gist.githubusercontent.com/TheDarthAdmin/b6c4b95f79e45b3f6481f5ab2f7cb0a0/raw/9efa5e17b1ffdd78cae11868a249d99a6ae27838/ShellSetup.ps1" |iex
