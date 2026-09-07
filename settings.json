@@ -2,10 +2,14 @@
     "$help": "https://aka.ms/terminal-documentation",
     "$schema": "https://aka.ms/terminal-profiles-schema",
     "actions": [],
+    "alwaysShowTabs": true,
+    "confirmCloseAllTabs": true,
     "copyFormatting": "none",
     "copyOnSelect": false,
     "defaultProfile": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
-    "keybindings": 
+    "firstWindowPreference": "defaultProfile",
+    "tabWidthMode": "titleLength",
+    "keybindings":
     [
         {
             "id": "Terminal.CopyToClipboard",
@@ -22,19 +26,90 @@
         {
             "id": "Terminal.DuplicatePaneAuto",
             "keys": "alt+shift+d"
+        },
+        {
+            "id": "Terminal.SplitPaneRight",
+            "keys": "alt+shift+plus"
+        },
+        {
+            "id": "Terminal.SplitPaneDown",
+            "keys": "alt+shift+minus"
+        },
+        {
+            "id": "Terminal.ClosePane",
+            "keys": "ctrl+shift+w"
+        },
+        {
+            "id": "Terminal.MoveFocusLeft",
+            "keys": "alt+left"
+        },
+        {
+            "id": "Terminal.MoveFocusRight",
+            "keys": "alt+right"
+        },
+        {
+            "id": "Terminal.MoveFocusUp",
+            "keys": "alt+up"
+        },
+        {
+            "id": "Terminal.MoveFocusDown",
+            "keys": "alt+down"
+        },
+        {
+            "id": "Terminal.OpenNewTabDropdown",
+            "keys": "ctrl+shift+space"
+        },
+        {
+            "id": "Terminal.ResetFontSize",
+            "keys": "ctrl+0"
+        },
+        {
+            "id": "Terminal.IncreaseFontSize",
+            "keys": "ctrl+plus"
+        },
+        {
+            "id": "Terminal.DecreaseFontSize",
+            "keys": "ctrl+minus"
+        },
+        {
+            "id": "Terminal.ToggleFocusMode",
+            "keys": "f11"
         }
     ],
-    "newTabMenu": 
+    "newTabMenu":
     [
         {
             "type": "remainingProfiles"
         }
     ],
-    "profiles": 
+    "profiles":
     {
-        "defaults": {},
-        "list": 
+        "defaults":
+        {
+            "font":
+            {
+                "face": "Hack Nerd Font",
+                "size": 11
+            },
+            "colorScheme": "One Half Dark",
+            "historySize": 9001,
+            "scrollbarState": "visible",
+            "snapOnInput": true,
+            "startingDirectory": "%USERPROFILE%"
+        },
+        "list":
         [
+            {
+                "backgroundImage": "https://wallpaperaccess.com/full/99791.jpg",
+                "backgroundImageOpacity": 0.8,
+                "backgroundImageStretchMode": "uniformToFill",
+                "guid": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
+                "hidden": false,
+                "name": "PowerShell",
+                "opacity": 80,
+                "source": "Windows.Terminal.PowershellCore",
+                "useAcrylic": false
+            },
             {
                 "commandline": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "guid": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
@@ -52,22 +127,6 @@
                 "hidden": false,
                 "name": "Azure Cloud Shell",
                 "source": "Windows.Terminal.Azure"
-            },
-            {
-                "backgroundImage": "https://wallpaperaccess.com/full/99791.jpg",
-                "backgroundImageOpacity": 0.8,
-                "colorScheme": "One Half Dark",
-                "elevate": true,
-                "font": 
-                {
-                    "face": "Hack Nerd Font"
-                },
-                "guid": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
-                "hidden": false,
-                "icon": null,
-                "name": "PowerShell",
-                "opacity": 80,
-                "source": "Windows.Terminal.PowershellCore"
             }
         ]
     },
