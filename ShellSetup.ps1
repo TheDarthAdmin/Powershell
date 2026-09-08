@@ -66,18 +66,22 @@ function Write-Fail { param([string]$Message) Write-Host "    $Message" -Foregro
 
 #region Filesystem helpers ----------------------------------------------------
 
+$script:LastWriteFailure = $null
+
 function Test-DirectoryWritable {
     <#
         Creates the directory if needed, then proves it by writing and deleting
-        a probe file.
+        a probe file. On failure the reason is left in $script:LastWriteFailure,
+        because "not usable" without a reason is not a diagnosis.
 
         Creating a directory is not proof that you can put a file in it. On a
         OneDrive-redirected Documents folder, New-Item can report success while
-        the subsequent file write fails with "Could not find a part of the
-        path" — which is exactly what happened here. So probe with a real write.
+        the subsequent file write fails.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Path)
+
+    $script:LastWriteFailure = $null
 
     try {
         if (-not (Test-Path -LiteralPath $Path)) {
@@ -90,6 +94,7 @@ function Test-DirectoryWritable {
         return $true
     }
     catch {
+        $script:LastWriteFailure = $_.Exception.Message
         Write-Verbose "Not writable: $Path -- $($_.Exception.Message)"
         return $false
     }
@@ -229,16 +234,40 @@ function Resolve-ProfilePath {
 
         if (Test-DirectoryWritable -Path $folder) { return $candidate }
         Write-Skip "Not usable: $folder"
+        if ($script:LastWriteFailure) { Write-Skip "  reason: $script:LastWriteFailure" }
     }
 
     return $null
 }
 
+function Test-InModulePath {
+    <#  Is this folder one PowerShell actually searches for modules? #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not $env:PSModulePath) { return $false }
+
+    $sep      = [IO.Path]::PathSeparator
+    $normalise = { $args[0].TrimEnd('\', '/').ToLowerInvariant() }
+
+    $target = & $normalise $Path
+    foreach ($entry in ($env:PSModulePath -split $sep)) {
+        if ($entry -and (& $normalise $entry) -eq $target) { return $true }
+    }
+    return $false
+}
+
 function Resolve-UserModuleRoot {
     <#
-        Returns a writable per-user module folder that PowerShell already
-        searches, so a module dropped there is importable without touching
-        $env:PSModulePath.
+        Returns an object with the chosen module folder and whether PowerShell
+        searches it.
+
+        Both matter. The previous version returned only a path, so when the
+        PSModulePath entry turned out to be unwritable and we fell back to a
+        fixed location, modules were installed somewhere PowerShell never looks
+        — which is why the run reported "direct download (0.11.0)" and
+        "Terminal-Icons missing" in the same breath. They were installed; they
+        just were not discoverable.
     #>
     [CmdletBinding()]
     param()
@@ -247,26 +276,74 @@ function Resolve-UserModuleRoot {
     $userPrefixes = @($env:USERPROFILE, $HOME, $env:OneDrive, $env:OneDriveCommercial) |
                     Where-Object { $_ }
 
-    $fromPath = @()
+    $candidates = New-Object System.Collections.Generic.List[string]
+
     if ($env:PSModulePath) {
-        $fromPath = $env:PSModulePath -split $sep | Where-Object {
-            $entry = $_
-            $entry -and ($userPrefixes | Where-Object { $entry -like "$_*" })
+        foreach ($entry in ($env:PSModulePath -split $sep)) {
+            if ($entry -and ($userPrefixes | Where-Object { $entry -like "$_*" })) {
+                $candidates.Add($entry)
+            }
         }
     }
 
-    foreach ($candidate in $fromPath) {
-        if (Test-DirectoryWritable -Path $candidate) { return $candidate }
-        Write-Skip "Not usable: $candidate"
+    # Fallbacks, in the order most likely to be both writable and expected.
+    foreach ($base in @($env:OneDrive, $env:OneDriveCommercial, $env:USERPROFILE)) {
+        if ($base) { $candidates.Add((Join-Path $base 'Documents\PowerShell\Modules')) }
     }
 
-    # Nothing in PSModulePath worked. Fall back to a fixed per-user location.
-    if ($env:USERPROFILE) {
-        $fallback = Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules'
-        if (Test-DirectoryWritable -Path $fallback) { return $fallback }
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (Test-DirectoryWritable -Path $candidate) {
+            return [PSCustomObject]@{
+                Path         = $candidate
+                InModulePath = Test-InModulePath -Path $candidate
+            }
+        }
+        Write-Skip "Not usable: $candidate"
+        if ($script:LastWriteFailure) { Write-Skip "  reason: $script:LastWriteFailure" }
     }
 
     return $null
+}
+
+function Add-ToUserModulePath {
+    <#
+        Adds a folder to PSModulePath for this session and for future ones.
+
+        Needed when the module folder PowerShell would normally use is not
+        writable: installing modules somewhere unsearched is no better than not
+        installing them.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $sep = [IO.Path]::PathSeparator
+
+    if (-not $PSCmdlet.ShouldProcess('PSModulePath (user environment variable)', "Add '$Path'")) {
+        return
+    }
+
+    try {
+        $persisted = [Environment]::GetEnvironmentVariable('PSModulePath', 'User')
+        $entries   = @()
+        if ($persisted) { $entries = @($persisted -split $sep | Where-Object { $_ }) }
+
+        if ($entries -notcontains $Path) {
+            [Environment]::SetEnvironmentVariable(
+                'PSModulePath', (($entries + $Path) -join $sep), 'User')
+            Write-Ok "Added to your PSModulePath: $Path"
+        }
+        else {
+            Write-Skip 'Already in your persisted PSModulePath.'
+        }
+    }
+    catch {
+        Write-Fail "Could not persist PSModulePath: $($_.Exception.Message)"
+    }
+
+    # Also apply to this session so the verification step below can see it.
+    if (-not (Test-InModulePath -Path $Path)) {
+        $env:PSModulePath = "$($env:PSModulePath)$sep$Path"
+    }
 }
 
 #endregion
@@ -334,15 +411,21 @@ function Install-ModuleFromGallery {
 
 function Install-RequiredModule {
     <#
-        Tries three routes in order of preference and verifies the result on
-        disk. Presence is the only signal worth trusting: Install-Module
-        reports errors it then recovers from, and recovers from errors it
-        reports.
+        Tries up to three routes and verifies the result on disk. Presence is
+        the only signal worth trusting: Install-Module reports errors it then
+        recovers from, and recovers from errors it reports.
+
+        -PreferDirectDownload skips the two scope-based routes. Both
+        Install-PSResource -Scope CurrentUser and Install-Module -Scope
+        CurrentUser write to the folder derived from your Documents location,
+        so when that location is broken they cannot succeed and there is no
+        point calling them just to print their failures.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$Name,
-        [string]$DestinationRoot
+        [string]$DestinationRoot,
+        [switch]$PreferDirectDownload
     )
 
     if (Get-Module -ListAvailable -Name $Name) {
@@ -354,32 +437,34 @@ function Install-RequiredModule {
 
     $attempts = @()
 
-    # Route 1: PSResourceGet. Ships with PowerShell 7.4+ and does not use
-    # PackageManagement, so it sidesteps the NuGet provider problem entirely.
-    if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
-        try {
-            Install-PSResource -Name $Name -Scope CurrentUser -TrustRepository `
-                -Reinstall -ErrorAction Stop -WarningAction SilentlyContinue
-            $attempts += 'Install-PSResource'
+    if (-not $PreferDirectDownload) {
+        # Route 1: PSResourceGet. Ships with PowerShell 7.4+ and does not use
+        # PackageManagement, so it sidesteps the NuGet provider problem.
+        if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
+            try {
+                Install-PSResource -Name $Name -Scope CurrentUser -TrustRepository `
+                    -Reinstall -ErrorAction Stop -WarningAction SilentlyContinue
+                $attempts += 'Install-PSResource'
+            }
+            catch {
+                $attempts += "Install-PSResource failed ($($_.Exception.Message))"
+            }
         }
-        catch {
-            $attempts += "Install-PSResource failed ($($_.Exception.Message))"
-        }
-    }
 
-    # Route 2: classic PowerShellGet.
-    if (-not (Get-Module -ListAvailable -Name $Name)) {
-        $installErrors = $null
-        Install-Module -Name $Name -Repository PSGallery -Scope CurrentUser `
-            -Force -AllowClobber -SkipPublisherCheck `
-            -ErrorAction SilentlyContinue -WarningAction SilentlyContinue `
-            -ErrorVariable installErrors
+        # Route 2: classic PowerShellGet.
+        if (-not (Get-Module -ListAvailable -Name $Name)) {
+            $installErrors = $null
+            Install-Module -Name $Name -Repository PSGallery -Scope CurrentUser `
+                -Force -AllowClobber -SkipPublisherCheck `
+                -ErrorAction SilentlyContinue -WarningAction SilentlyContinue `
+                -ErrorVariable installErrors
 
-        if ($installErrors) {
-            $attempts += "Install-Module failed ($($installErrors[0].Exception.Message))"
-        }
-        else {
-            $attempts += 'Install-Module'
+            if ($installErrors) {
+                $attempts += "Install-Module failed ($($installErrors[0].Exception.Message))"
+            }
+            else {
+                $attempts += 'Install-Module'
+            }
         }
     }
 
@@ -406,11 +491,24 @@ function Install-RequiredModule {
     if ($installed) {
         Write-Ok "$Name $($installed.Version) installed."
         Write-Verbose "Routes tried for $Name -- $($attempts -join '; ')"
+        return
+    }
+
+    # Files may be on disk in a folder PowerShell does not search. That is a
+    # different problem from a failed install and needs a different fix, so say
+    # which one it is.
+    $onDisk = if ($DestinationRoot) { Join-Path $DestinationRoot $Name } else { $null }
+
+    if ($onDisk -and (Test-Path -LiteralPath $onDisk)) {
+        Write-Fail "$Name was installed but PowerShell cannot see it."
+        Write-Skip "  on disk at: $onDisk"
+        Write-Skip '  that folder is not in $env:PSModulePath'
     }
     else {
         Write-Fail "$Name was NOT installed."
-        foreach ($attempt in $attempts) { Write-Skip "  $attempt" }
     }
+
+    foreach ($attempt in $attempts) { Write-Skip "  $attempt" }
 }
 
 #endregion
@@ -619,7 +717,33 @@ function Show-Diagnostics {
         $env:PSModulePath -split $sep | Where-Object { $_ -and $_ -like "$env:USERPROFILE*" } |
             ForEach-Object { Write-Skip $_ }
     }
-    Write-Skip "Resolved module root : $(Resolve-UserModuleRoot)"
+    $rootInfo = Resolve-UserModuleRoot
+    if ($rootInfo) {
+        Write-Skip "Resolved module root : $($rootInfo.Path)"
+        Write-Skip "Searched by PowerShell: $($rootInfo.InModulePath)"
+    }
+    else {
+        Write-Fail 'Resolved module root : none writable'
+    }
+
+    # A redirected Documents folder whose recorded path does not exist on disk
+    # breaks $PROFILE and the per-user module folder at the same time, so check
+    # for it explicitly and name the folder that is actually there.
+    Write-Step 'Documents redirection'
+    $recorded = [Environment]::GetFolderPath('MyDocuments')
+    Write-Skip "Recorded Documents : $recorded"
+
+    if ($recorded -and -not (Test-Path -LiteralPath $recorded)) {
+        Write-Fail 'That folder does not exist. Siblings actually present:'
+        $parent = Split-Path -Path $recorded -Parent
+        if ($parent -and (Test-Path -LiteralPath $parent)) {
+            Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Skip "  $($_.Name)" }
+        }
+    }
+    elseif ($recorded) {
+        Write-Ok 'That folder exists.'
+    }
 
     Write-Step 'Package tooling'
     foreach ($cmd in 'Install-PSResource', 'Install-Module') {
@@ -665,10 +789,34 @@ if ($SkipModules) {
     Write-Skip 'Skipped (-SkipModules).'
 }
 else {
-    if (-not $ModuleRoot) { $ModuleRoot = Resolve-UserModuleRoot }
+    $preferDirect = $false
 
-    if ($ModuleRoot) { Write-Skip "Module folder: $ModuleRoot" }
-    else { Write-Fail 'No writable per-user module folder found.' }
+    if ($ModuleRoot) {
+        $rootInfo = [PSCustomObject]@{
+            Path         = $ModuleRoot
+            InModulePath = Test-InModulePath -Path $ModuleRoot
+        }
+    }
+    else {
+        $rootInfo  = Resolve-UserModuleRoot
+        $ModuleRoot = if ($rootInfo) { $rootInfo.Path } else { $null }
+    }
+
+    if (-not $ModuleRoot) {
+        Write-Fail 'No writable per-user module folder found.'
+    }
+    else {
+        Write-Skip "Module folder: $ModuleRoot"
+
+        if (-not $rootInfo.InModulePath) {
+            # We are not using the folder PowerShell would have used, so the
+            # scope-based installers cannot help and whatever we put here will
+            # be invisible until PSModulePath knows about it.
+            $preferDirect = $true
+            Write-Fail 'PowerShell does not currently search that folder.'
+            Add-ToUserModulePath -Path $ModuleRoot
+        }
+    }
 
     $modules = @('Terminal-Icons', 'PowerColorLS')
 
@@ -678,7 +826,8 @@ else {
     else { Write-Skip "PSReadLine $($psrl.Version) is recent enough." }
 
     foreach ($module in $modules) {
-        Install-RequiredModule -Name $module -DestinationRoot $ModuleRoot
+        Install-RequiredModule -Name $module -DestinationRoot $ModuleRoot `
+            -PreferDirectDownload:$preferDirect
     }
 }
 
@@ -727,9 +876,29 @@ elseif ($PSCmdlet.ShouldProcess($ProfilePath, 'Install profile')) {
 
         if ($PSVersionTable.PSVersion.Major -ge 6 -and
             $ProfilePath -ne $PROFILE.CurrentUserCurrentHost) {
-            Write-Fail 'This is not the path this shell loads on startup:'
-            Write-Skip "  expected: $($PROFILE.CurrentUserCurrentHost)"
-            Write-Skip 'Your Documents redirection needs fixing before it loads automatically.'
+
+            $expectedFolder = Split-Path -Path $PROFILE.CurrentUserCurrentHost -Parent
+            $recordedDocs   = [Environment]::GetFolderPath('MyDocuments')
+            $realDocs       = Split-Path -Path (Split-Path -Path $ProfilePath -Parent) -Parent
+
+            Write-Host ''
+            Write-Fail 'This profile will NOT load automatically.'
+            Write-Skip "PowerShell reads only: $($PROFILE.CurrentUserCurrentHost)"
+            Write-Skip "and that folder is not writable: $expectedFolder"
+            Write-Host ''
+            Write-Skip 'Windows has your Documents folder recorded in one place and the'
+            Write-Skip 'folder actually exists in another:'
+            Write-Skip "  recorded : $recordedDocs"
+            Write-Skip "  on disk  : $realDocs"
+            Write-Host ''
+            Write-Skip 'Point Windows at the real one, then sign out and back in:'
+            Write-Skip ('  $real = "{0}"' -f $realDocs)
+            Write-Skip "  `$k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer'"
+            Write-Skip "  Set-ItemProperty `"`$k\User Shell Folders`" -Name Personal -Value `$real"
+            Write-Skip "  Set-ItemProperty `"`$k\Shell Folders`"      -Name Personal -Value `$real"
+            Write-Host ''
+            Write-Skip 'Until then you can load it by hand with:'
+            Write-Skip "  . '$ProfilePath'"
         }
     }
     catch {
