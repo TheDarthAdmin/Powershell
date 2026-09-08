@@ -9,39 +9,37 @@
     it overwrites, it backs up first.
 
     Files are taken from the folder this script lives in when they are present
-    there, and downloaded from GitHub only as a fallback. That way a local
-    checkout installs the profile you are actually looking at rather than
-    whatever is currently on the default branch.
+    there, and downloaded from GitHub only as a fallback. Run it from a local
+    checkout to install the files you are actually looking at rather than
+    whatever is on the default branch.
+
+.PARAMETER Diagnose
+    Print the paths and tool versions this script depends on, then exit without
+    changing anything. Start here when something fails.
 
 .PARAMETER ProfilePath
     Where to write the profile. By default the script resolves the PowerShell 7
-    profile location itself and creates the folder if needed.
+    profile location itself.
 
-.PARAMETER SkipModules
-    Do not install PowerShell modules.
+.PARAMETER ModuleRoot
+    Where to install modules. Defaults to the first writable per-user entry in
+    $env:PSModulePath.
 
-.PARAMETER SkipFont
-    Do not install Hack Nerd Font.
-
-.PARAMETER SkipTerminalSettings
-    Do not touch the Windows Terminal settings.json.
-
-.PARAMETER InstallBitwarden
-    Also install the Bitwarden CLI via winget.
+.EXAMPLE
+    .\ShellSetup.ps1 -Diagnose
 
 .EXAMPLE
     .\ShellSetup.ps1
 
-.EXAMPLE
-    .\ShellSetup.ps1 -SkipTerminalSettings -Verbose
-
 .NOTES
-    Run from a normal (non-elevated) prompt. Everything is installed for the
-    current user, so administrator rights are not needed.
+    Run from a normal (non-elevated) PowerShell 7 prompt. Everything installs
+    for the current user, so administrator rights are not needed.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
+    [switch]$Diagnose,
     [string]$ProfilePath,
+    [string]$ModuleRoot,
     [switch]$SkipModules,
     [switch]$SkipFont,
     [switch]$SkipTerminalSettings,
@@ -54,14 +52,67 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $RepoRawBase = "https://raw.githubusercontent.com/TheDarthAdmin/Powershell/$SourceBranch"
+$GalleryApi  = 'https://www.powershellgallery.com/api/v2/package'
 $LocalRoot   = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
 
-#region Helpers ---------------------------------------------------------------
+#region Output helpers --------------------------------------------------------
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$Message) Write-Host "    $Message" -ForegroundColor Green }
 function Write-Skip { param([string]$Message) Write-Host "    $Message" -ForegroundColor DarkGray }
 function Write-Fail { param([string]$Message) Write-Host "    $Message" -ForegroundColor Yellow }
+
+#endregion
+
+#region Filesystem helpers ----------------------------------------------------
+
+function Test-DirectoryWritable {
+    <#
+        Creates the directory if needed, then proves it by writing and deleting
+        a probe file.
+
+        Creating a directory is not proof that you can put a file in it. On a
+        OneDrive-redirected Documents folder, New-Item can report success while
+        the subsequent file write fails with "Could not find a part of the
+        path" — which is exactly what happened here. So probe with a real write.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
+        }
+
+        $probe = Join-Path $Path (".probe-{0}.tmp" -f [guid]::NewGuid().ToString('N'))
+        [IO.File]::WriteAllText($probe, 'probe')
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        return $true
+    }
+    catch {
+        Write-Verbose "Not writable: $Path -- $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Write-PathDiagnostic {
+    <#  Walks a path segment by segment and reports which part is missing. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $parts   = $Path -split '[\\/]'
+    $current = ''
+
+    foreach ($part in $parts) {
+        if ([string]::IsNullOrEmpty($part)) { continue }
+
+        $current = if ($current) { Join-Path $current $part } else { "$part\" }
+        $exists  = Test-Path -LiteralPath $current
+
+        if ($exists) { Write-Skip "  [ok]      $current" }
+        else         { Write-Fail "  [missing] $current"; break }
+    }
+}
 
 function Backup-File {
     <#  Copies a file next to itself with a timestamp. Returns the backup path. #>
@@ -79,9 +130,8 @@ function Backup-File {
 function Install-ConfigFile {
     <#
         Puts a file in place from the local checkout if it is there, otherwise
-        from GitHub. Writes to a temp file first and only then moves it into
-        position, so a failed or truncated download can never destroy the file
-        being replaced.
+        from GitHub. Staged through a temp file so a failed or truncated
+        download can never destroy the file being replaced.
     #>
     [CmdletBinding()]
     param(
@@ -114,17 +164,21 @@ function Install-ConfigFile {
         }
 
         $parent = Split-Path -Path $Destination -Parent
-        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-            # Report the path we failed on. "Could not find a part of the path"
-            # with no path in it is not a useful error message.
-            try   { New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null }
-            catch { throw "Could not create the folder '$parent': $($_.Exception.Message)" }
+        if ($parent -and -not (Test-DirectoryWritable -Path $parent)) {
+            Write-Fail "Cannot write into '$parent'. Path breakdown:"
+            Write-PathDiagnostic -Path $parent
+            throw "The folder '$parent' exists or was created but will not accept files."
         }
 
         Backup-File -Path $Destination | Out-Null
 
-        try   { Move-Item -LiteralPath $temp -Destination $Destination -Force -ErrorAction Stop }
-        catch { throw "Could not write to '$Destination': $($_.Exception.Message)" }
+        # Copy, not Move. File.Move (which Move-Item uses) is the operation that
+        # fails on OneDrive placeholder folders; a stream copy goes through.
+        Copy-Item -LiteralPath $temp -Destination $Destination -Force -ErrorAction Stop
+
+        if (-not (Test-Path -LiteralPath $Destination)) {
+            throw "Wrote '$Destination' without error but the file is not there."
+        }
     }
     finally {
         if (Test-Path -LiteralPath $temp) {
@@ -133,25 +187,25 @@ function Install-ConfigFile {
     }
 }
 
+#endregion
+
+#region Path resolution -------------------------------------------------------
+
 function Resolve-ProfilePath {
     <#
-        Works out where the PowerShell 7 profile belongs and returns a path whose
-        folder exists and is writable.
+        Returns a PowerShell 7 profile path whose folder will actually accept a
+        file, or $null.
 
-        $PROFILE cannot be trusted here on its own. Run this script from Windows
-        PowerShell 5.1 and $PROFILE points at Documents\WindowsPowerShell\,
-        where a "#Requires -Version 7.0" profile will refuse to load. And when
-        Documents is redirected to OneDrive, the registry value $PROFILE is built
-        from can point at a folder that no longer exists, which is what produces
-        "Could not find a part of the path". So: build a candidate list, and pick
-        the first one we can actually create a folder in.
+        Candidates are probed with a real write rather than a directory
+        creation, because a redirected Documents folder can pass the second and
+        fail the first.
     #>
     [CmdletBinding()]
     param()
 
     $candidates = New-Object System.Collections.Generic.List[string]
 
-    # If we are already in PowerShell 7, its own answer is the best answer.
+    # PowerShell 7's own answer first, because that is the only path it loads.
     if ($PSVersionTable.PSVersion.Major -ge 6) {
         $candidates.Add($PROFILE.CurrentUserCurrentHost)
     }
@@ -159,15 +213,13 @@ function Resolve-ProfilePath {
     $docs = try { [Environment]::GetFolderPath('MyDocuments') } catch { $null }
     if ($docs) { $candidates.Add((Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1')) }
 
-    if ($env:OneDrive) {
-        $candidates.Add((Join-Path $env:OneDrive 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1'))
+    foreach ($od in @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer)) {
+        if ($od) { $candidates.Add((Join-Path $od 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1')) }
     }
 
-    if ($env:OneDriveCommercial -and $env:OneDriveCommercial -ne $env:OneDrive) {
-        $candidates.Add((Join-Path $env:OneDriveCommercial 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1'))
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1'))
     }
-
-    $candidates.Add((Join-Path $env:USERPROFILE 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1'))
 
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
@@ -175,109 +227,211 @@ function Resolve-ProfilePath {
         $folder = Split-Path -Path $candidate -Parent
         if (-not $folder) { continue }
 
-        if (Test-Path -LiteralPath $folder) {
-            Write-Verbose "Profile folder already exists: $folder"
-            return $candidate
-        }
-
-        try {
-            New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
-            Write-Verbose "Created profile folder: $folder"
-            return $candidate
-        }
-        catch {
-            Write-Verbose "Cannot use '$folder': $($_.Exception.Message)"
-        }
+        if (Test-DirectoryWritable -Path $folder) { return $candidate }
+        Write-Skip "Not usable: $folder"
     }
 
     return $null
 }
 
-function Initialize-PackageSource {
+function Resolve-UserModuleRoot {
     <#
-        The "Administrator rights are required" error from Install-Package comes
-        from PowerShellGet 1.0.0.1, the version that ships with Windows
-        PowerShell 5.1: its NuGet provider bootstrap ignores -Scope CurrentUser
-        and tries to write to Program Files. The module install itself then
-        usually succeeds anyway, which is why the first run reported both an
-        error and a success. Bootstrap the provider per-user up front so the
-        error never appears.
+        Returns a writable per-user module folder that PowerShell already
+        searches, so a module dropped there is importable without touching
+        $env:PSModulePath.
     #>
     [CmdletBinding()]
     param()
 
-    try {
-        $nuget = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue |
-                 Sort-Object Version -Descending | Select-Object -First 1
+    $sep = [IO.Path]::PathSeparator
+    $userPrefixes = @($env:USERPROFILE, $HOME, $env:OneDrive, $env:OneDriveCommercial) |
+                    Where-Object { $_ }
 
-        if (-not $nuget -or $nuget.Version -lt [version]'2.8.5.201') {
-            Write-Skip 'Bootstrapping the NuGet package provider for the current user...'
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 `
-                -Scope CurrentUser -Force -ErrorAction Stop | Out-Null
+    $fromPath = @()
+    if ($env:PSModulePath) {
+        $fromPath = $env:PSModulePath -split $sep | Where-Object {
+            $entry = $_
+            $entry -and ($userPrefixes | Where-Object { $entry -like "$_*" })
         }
     }
-    catch {
-        Write-Verbose "NuGet provider bootstrap failed: $($_.Exception.Message)"
+
+    foreach ($candidate in $fromPath) {
+        if (Test-DirectoryWritable -Path $candidate) { return $candidate }
+        Write-Skip "Not usable: $candidate"
     }
 
-    try {
-        $gallery = Get-PSRepository -Name PSGallery -ErrorAction Stop
-        if ($gallery.InstallationPolicy -ne 'Trusted') {
-            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop
-            Write-Skip 'PSGallery marked as trusted for this user.'
-        }
+    # Nothing in PSModulePath worked. Fall back to a fixed per-user location.
+    if ($env:USERPROFILE) {
+        $fallback = Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules'
+        if (Test-DirectoryWritable -Path $fallback) { return $fallback }
     }
-    catch {
-        Write-Verbose "Could not configure PSGallery: $($_.Exception.Message)"
+
+    return $null
+}
+
+#endregion
+
+#region Module installation ---------------------------------------------------
+
+function Install-ModuleFromGallery {
+    <#
+        Downloads the .nupkg from the PowerShell Gallery and unpacks it into the
+        user's module folder.
+
+        This exists because Install-Module on this machine fails with
+        "Administrator rights are required" even with -Scope CurrentUser. That
+        error comes from PackageManagement's NuGet provider, which wants to
+        bootstrap itself machine-wide. A .nupkg is just a zip, and the module
+        folder is just a folder, so neither PackageManagement nor PowerShellGet
+        needs to be involved at all.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$DestinationRoot
+    )
+
+    $tempZip = Join-Path ([IO.Path]::GetTempPath()) ("$Name-{0}.zip" -f [guid]::NewGuid().ToString('N'))
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("$Name-{0}"     -f [guid]::NewGuid().ToString('N'))
+
+    try {
+        Invoke-WebRequest -Uri "$GalleryApi/$Name" -OutFile $tempZip -UseBasicParsing -ErrorAction Stop
+        Expand-Archive -LiteralPath $tempZip -DestinationPath $tempDir -Force
+
+        $nuspec = Get-ChildItem -LiteralPath $tempDir -Filter '*.nuspec' -File |
+                  Select-Object -First 1
+        if (-not $nuspec) { throw 'The package contained no .nuspec, so the version is unknown.' }
+
+        $version = ([xml](Get-Content -LiteralPath $nuspec.FullName -Raw)).package.metadata.version
+        if (-not $version) { throw 'Could not read the version from the .nuspec.' }
+
+        # Strip NuGet packaging artefacts that are not part of the module.
+        foreach ($cruft in '_rels', 'package') {
+            $path = Join-Path $tempDir $cruft
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+        }
+        foreach ($cruft in '[Content_Types].xml', $nuspec.Name) {
+            $path = Join-Path $tempDir $cruft
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+        }
+
+        $destination = Join-Path $DestinationRoot (Join-Path $Name $version)
+        if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+
+        Get-ChildItem -LiteralPath $tempDir -Force |
+            Copy-Item -Destination $destination -Recurse -Force
+
+        return [version]$version
+    }
+    finally {
+        Remove-Item -LiteralPath $tempZip -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-function Install-GalleryModule {
+function Install-RequiredModule {
     <#
-        Installs a module and then checks whether it is actually there. The
-        original trusted Install-Module's error stream, which reports failures
-        it goes on to recover from, so the script printed "installed" directly
-        underneath an error and would have printed it on a real failure too.
-        Presence on disk is the only reliable signal.
+        Tries three routes in order of preference and verifies the result on
+        disk. Presence is the only signal worth trusting: Install-Module
+        reports errors it then recovers from, and recovers from errors it
+        reports.
     #>
     [CmdletBinding(SupportsShouldProcess)]
-    param([Parameter(Mandatory)][string]$Name)
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$DestinationRoot
+    )
 
     if (Get-Module -ListAvailable -Name $Name) {
         Write-Skip "$Name is already installed."
         return
     }
 
-    if (-not $PSCmdlet.ShouldProcess($Name, 'Install-Module')) { return }
+    if (-not $PSCmdlet.ShouldProcess($Name, 'Install module')) { return }
 
-    $installErrors = $null
-    Install-Module -Name $Name -Repository PSGallery -Scope CurrentUser `
-        -Force -AllowClobber -SkipPublisherCheck `
-        -ErrorAction SilentlyContinue -WarningAction SilentlyContinue `
-        -ErrorVariable installErrors
+    $attempts = @()
+
+    # Route 1: PSResourceGet. Ships with PowerShell 7.4+ and does not use
+    # PackageManagement, so it sidesteps the NuGet provider problem entirely.
+    if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
+        try {
+            Install-PSResource -Name $Name -Scope CurrentUser -TrustRepository `
+                -Reinstall -ErrorAction Stop -WarningAction SilentlyContinue
+            $attempts += 'Install-PSResource'
+        }
+        catch {
+            $attempts += "Install-PSResource failed ($($_.Exception.Message))"
+        }
+    }
+
+    # Route 2: classic PowerShellGet.
+    if (-not (Get-Module -ListAvailable -Name $Name)) {
+        $installErrors = $null
+        Install-Module -Name $Name -Repository PSGallery -Scope CurrentUser `
+            -Force -AllowClobber -SkipPublisherCheck `
+            -ErrorAction SilentlyContinue -WarningAction SilentlyContinue `
+            -ErrorVariable installErrors
+
+        if ($installErrors) {
+            $attempts += "Install-Module failed ($($installErrors[0].Exception.Message))"
+        }
+        else {
+            $attempts += 'Install-Module'
+        }
+    }
+
+    # Route 3: unpack the .nupkg by hand.
+    if (-not (Get-Module -ListAvailable -Name $Name)) {
+        if (-not $DestinationRoot) {
+            $attempts += 'nupkg fallback skipped (no writable module folder)'
+        }
+        else {
+            try {
+                Write-Skip "Falling back to a direct download for $Name..."
+                $version = Install-ModuleFromGallery -Name $Name -DestinationRoot $DestinationRoot
+                $attempts += "direct download ($version)"
+            }
+            catch {
+                $attempts += "direct download failed ($($_.Exception.Message))"
+            }
+        }
+    }
 
     $installed = Get-Module -ListAvailable -Name $Name |
                  Sort-Object Version -Descending | Select-Object -First 1
 
     if ($installed) {
         Write-Ok "$Name $($installed.Version) installed."
-        if ($installErrors) {
-            Write-Verbose "$Name installed despite: $($installErrors[0].Exception.Message)"
-        }
+        Write-Verbose "Routes tried for $Name -- $($attempts -join '; ')"
     }
     else {
-        $reason = if ($installErrors) { $installErrors[0].Exception.Message } else { 'unknown error' }
-        Write-Fail "$Name was NOT installed: $reason"
+        Write-Fail "$Name was NOT installed."
+        foreach ($attempt in $attempts) { Write-Skip "  $attempt" }
     }
 }
 
+#endregion
+
+#region Font installation -----------------------------------------------------
+
 function Test-FontInstalled {
     <#
-        Reads the font value names out of the registry. Checks the per-user hive
-        as well as the machine hive.
+        Whitespace is stripped from both sides before comparing.
+
+        The previous version searched the registry for "Hack Nerd Font" while
+        the value names are built from filenames, so it was looking for
+        "Hack Nerd Font" and the registry held "HackNerdFont-Bold (TrueType)".
+        The font was installed and registered correctly; only the check was
+        wrong. It also now accepts the files simply being present in the
+        per-user font folder.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$NamePattern)
+
+    $needle = ($NamePattern -replace '\s', '').ToLowerInvariant()
 
     $roots = @(
         'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts',
@@ -286,22 +440,28 @@ function Test-FontInstalled {
 
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root)) { continue }
-        $names = (Get-Item -LiteralPath $root).GetValueNames()
-        if ($names | Where-Object { $_ -like "*$NamePattern*" }) { return $true }
+
+        foreach ($name in (Get-Item -LiteralPath $root).GetValueNames()) {
+            if ((($name -replace '\s', '').ToLowerInvariant()) -like "*$needle*") { return $true }
+        }
     }
+
+    $fontDir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
+    if (Test-Path -LiteralPath $fontDir) {
+        $match = Get-ChildItem -LiteralPath $fontDir -File -ErrorAction SilentlyContinue |
+                 Where-Object { (($_.BaseName -replace '\s', '').ToLowerInvariant()) -like "*$needle*" }
+        if ($match) { return $true }
+    }
+
     return $false
 }
 
 function Install-NerdFont {
     <#
         Installs into %LOCALAPPDATA%\Microsoft\Windows\Fonts and registers under
-        HKCU, so no elevation is needed.
-
-        Font files already in place are left alone. A .ttf loaded by a running
-        process cannot be overwritten, and there is no reason to: if the file is
-        already the right size it is the same font, so skip the copy and just
-        make sure the registry entry exists. One locked file no longer aborts
-        the whole install.
+        HKCU, so no elevation is needed. Files already present at the right size
+        are left alone rather than overwritten, because a .ttf loaded by a
+        running process cannot be replaced and does not need to be.
     #>
     [CmdletBinding()]
     param(
@@ -329,11 +489,10 @@ function Install-NerdFont {
         New-Item -ItemType Directory -Path $fontDir -Force | Out-Null
         if (-not (Test-Path -LiteralPath $regPath)) { New-Item -Path $regPath -Force | Out-Null }
 
-        $copied = 0; $alreadyThere = 0; $failed = @()
+        $copied = 0; $alreadyThere = 0; $registered = 0; $failed = @()
 
         foreach ($font in $fonts) {
-            $dest = Join-Path $fontDir $font.Name
-
+            $dest     = Join-Path $fontDir $font.Name
             $existing = if (Test-Path -LiteralPath $dest) { Get-Item -LiteralPath $dest } else { $null }
 
             if ($existing -and $existing.Length -eq $font.Length) {
@@ -346,7 +505,6 @@ function Install-NerdFont {
                 }
                 catch {
                     if ($existing) {
-                        # Locked by a running app but already present. Fine.
                         $alreadyThere++
                         Write-Verbose "In use, keeping existing copy: $($font.Name)"
                     }
@@ -364,14 +522,14 @@ function Install-NerdFont {
             try {
                 New-ItemProperty -Path $regPath -Name $regName -Value $dest `
                     -PropertyType String -Force -ErrorAction Stop | Out-Null
+                $registered++
             }
             catch {
-                Write-Verbose "Could not register $regName : $($_.Exception.Message)"
+                Write-Verbose "Could not register '$regName': $($_.Exception.Message)"
             }
         }
 
-        $summary = "${FriendlyName}: $copied file(s) installed"
-        if ($alreadyThere) { $summary += ", $alreadyThere already present or in use" }
+        $summary = "${FriendlyName}: $copied copied, $alreadyThere already present, $registered registered"
         Write-Ok "$summary."
 
         if ($failed.Count -gt 0) {
@@ -384,6 +542,10 @@ function Install-NerdFont {
         Remove-Item -LiteralPath $extractPath -Force -Recurse -ErrorAction SilentlyContinue
     }
 }
+
+#endregion
+
+#region Other helpers ---------------------------------------------------------
 
 function Get-TerminalSettingsPath {
     <#  Handles Store, Preview, and unpackaged installs of Windows Terminal. #>
@@ -428,6 +590,52 @@ function Install-WingetPackage {
     else { Write-Fail "winget returned exit code $LASTEXITCODE for $FriendlyName." }
 }
 
+function Show-Diagnostics {
+    [CmdletBinding()]
+    param()
+
+    Write-Step 'Host'
+    Write-Skip "PowerShell     : $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
+    Write-Skip "Script folder  : $(if ($LocalRoot) { $LocalRoot } else { '<none: running from a pipe>' })"
+
+    Write-Step 'Profile candidates'
+    Write-Skip "`$PROFILE                 : $($PROFILE.CurrentUserCurrentHost)"
+    Write-Skip "MyDocuments              : $([Environment]::GetFolderPath('MyDocuments'))"
+    Write-Skip "OneDrive                 : $($env:OneDrive)"
+    Write-Skip "OneDriveCommercial       : $($env:OneDriveCommercial)"
+    Write-Skip "USERPROFILE\Documents    : $(Join-Path $env:USERPROFILE 'Documents')"
+
+    $profileFolder = Split-Path -Path $PROFILE.CurrentUserCurrentHost -Parent
+    Write-Step "Writability of $profileFolder"
+    if (Test-DirectoryWritable -Path $profileFolder) { Write-Ok 'Writable.' }
+    else {
+        Write-Fail 'NOT writable. Path breakdown:'
+        Write-PathDiagnostic -Path $profileFolder
+    }
+
+    Write-Step 'PSModulePath (per-user entries)'
+    $sep = [IO.Path]::PathSeparator
+    if ($env:PSModulePath) {
+        $env:PSModulePath -split $sep | Where-Object { $_ -and $_ -like "$env:USERPROFILE*" } |
+            ForEach-Object { Write-Skip $_ }
+    }
+    Write-Skip "Resolved module root : $(Resolve-UserModuleRoot)"
+
+    Write-Step 'Package tooling'
+    foreach ($cmd in 'Install-PSResource', 'Install-Module') {
+        $found = Get-Command $cmd -ErrorAction SilentlyContinue
+        if ($found) { Write-Ok "$cmd available ($($found.Source) $($found.Version))" }
+        else { Write-Fail "$cmd not available" }
+    }
+
+    Write-Step 'Fonts'
+    Write-Skip "Hack Nerd Font detected : $(Test-FontInstalled -NamePattern 'Hack Nerd Font')"
+
+    Write-Step 'Windows Terminal'
+    Write-Skip "settings.json : $(Get-TerminalSettingsPath)"
+    Write-Host ''
+}
+
 #endregion
 
 #region Main ------------------------------------------------------------------
@@ -436,6 +644,11 @@ Write-Host ''
 Write-Host 'PowerShell and Windows Terminal setup' -ForegroundColor White
 Write-Host '-------------------------------------' -ForegroundColor DarkGray
 Write-Host "Running under PowerShell $($PSVersionTable.PSVersion)" -ForegroundColor DarkGray
+
+if ($Diagnose) {
+    Show-Diagnostics
+    return
+}
 
 if ($PSVersionTable.PSVersion.Major -lt 6) {
     Write-Host ''
@@ -452,24 +665,20 @@ if ($SkipModules) {
     Write-Skip 'Skipped (-SkipModules).'
 }
 else {
-    Initialize-PackageSource
+    if (-not $ModuleRoot) { $ModuleRoot = Resolve-UserModuleRoot }
+
+    if ($ModuleRoot) { Write-Skip "Module folder: $ModuleRoot" }
+    else { Write-Fail 'No writable per-user module folder found.' }
 
     $modules = @('Terminal-Icons', 'PowerColorLS')
 
-    # PSReadLine ships in the box, so a plain -ListAvailable check never
-    # installs a newer build. Only pull from the gallery when the shipped
-    # version is too old for ListView predictions.
     $psrl = Get-Module -ListAvailable -Name PSReadLine |
             Sort-Object Version -Descending | Select-Object -First 1
-    if (-not $psrl -or $psrl.Version -lt [version]'2.2.0') {
-        $modules += 'PSReadLine'
-    }
-    else {
-        Write-Skip "PSReadLine $($psrl.Version) is recent enough."
-    }
+    if (-not $psrl -or $psrl.Version -lt [version]'2.2.0') { $modules += 'PSReadLine' }
+    else { Write-Skip "PSReadLine $($psrl.Version) is recent enough." }
 
     foreach ($module in $modules) {
-        Install-GalleryModule -Name $module
+        Install-RequiredModule -Name $module -DestinationRoot $ModuleRoot
     }
 }
 
@@ -489,7 +698,7 @@ if ($SkipFont) {
     Write-Skip 'Skipped (-SkipFont).'
 }
 elseif (Test-FontInstalled -NamePattern 'Hack Nerd Font') {
-    Write-Skip 'Already registered.'
+    Write-Skip 'Already installed.'
 }
 elseif ($PSCmdlet.ShouldProcess('Hack Nerd Font', 'Install')) {
     try {
@@ -504,19 +713,24 @@ elseif ($PSCmdlet.ShouldProcess('Hack Nerd Font', 'Install')) {
 # --- 4. PowerShell profile --------------------------------------------------
 Write-Step 'PowerShell profile'
 
-if (-not $ProfilePath) {
-    $ProfilePath = Resolve-ProfilePath
-}
+if (-not $ProfilePath) { $ProfilePath = Resolve-ProfilePath }
 
 if (-not $ProfilePath) {
-    Write-Fail 'Could not find a writable location for the profile.'
-    Write-Skip 'Pass one explicitly, for example:'
-    Write-Skip '  .\ShellSetup.ps1 -ProfilePath "$env:USERPROFILE\Documents\PowerShell\Microsoft.PowerShell_profile.ps1"'
+    Write-Fail 'No writable location for the profile was found.'
+    Write-Skip 'Run with -Diagnose to see why, then pass a path explicitly:'
+    Write-Skip '  .\ShellSetup.ps1 -ProfilePath "C:\path\to\Microsoft.PowerShell_profile.ps1"'
 }
 elseif ($PSCmdlet.ShouldProcess($ProfilePath, 'Install profile')) {
     try {
         Install-ConfigFile -FileName 'MyPwshProfile.ps1' -Destination $ProfilePath
         Write-Ok "Profile installed at $ProfilePath"
+
+        if ($PSVersionTable.PSVersion.Major -ge 6 -and
+            $ProfilePath -ne $PROFILE.CurrentUserCurrentHost) {
+            Write-Fail 'This is not the path this shell loads on startup:'
+            Write-Skip "  expected: $($PROFILE.CurrentUserCurrentHost)"
+            Write-Skip 'Your Documents redirection needs fixing before it loads automatically.'
+        }
     }
     catch {
         Write-Fail "Could not install the profile: $($_.Exception.Message)"
@@ -564,8 +778,8 @@ else {
     Write-Fail 'oh-my-posh not on PATH in this session (open a new tab)'
 }
 
-if (Test-FontInstalled -NamePattern 'Hack Nerd Font') { Write-Ok 'Hack Nerd Font registered' }
-else { Write-Fail 'Hack Nerd Font not registered' }
+if (Test-FontInstalled -NamePattern 'Hack Nerd Font') { Write-Ok 'Hack Nerd Font installed' }
+else { Write-Fail 'Hack Nerd Font not installed' }
 
 if ($ProfilePath -and (Test-Path -LiteralPath $ProfilePath)) { Write-Ok "Profile at $ProfilePath" }
 else { Write-Fail 'Profile not installed' }
