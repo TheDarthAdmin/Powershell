@@ -8,10 +8,17 @@
     Safe to run more than once. Everything it can detect, it skips. Everything
     it overwrites, it backs up first.
 
+    Files are taken from the folder this script lives in when they are present
+    there, and downloaded from GitHub only as a fallback. That way a local
+    checkout installs the profile you are actually looking at rather than
+    whatever is currently on the default branch.
+
 .PARAMETER ProfilePath
-    Where to write the profile. Defaults to $PROFILE.CurrentUserCurrentHost,
-    which already resolves to the OneDrive location when Documents is
-    redirected, so you normally do not need this.
+    Where to write the profile. By default the script resolves the PowerShell 7
+    profile location itself and creates the folder if needed.
+
+.PARAMETER SkipModules
+    Do not install PowerShell modules.
 
 .PARAMETER SkipFont
     Do not install Hack Nerd Font.
@@ -26,15 +33,16 @@
     .\ShellSetup.ps1
 
 .EXAMPLE
-    .\ShellSetup.ps1 -SkipTerminalSettings
+    .\ShellSetup.ps1 -SkipTerminalSettings -Verbose
 
 .NOTES
-    Run from a normal (non-elevated) prompt. The font goes into your user
-    profile, so administrator rights are not needed.
+    Run from a normal (non-elevated) prompt. Everything is installed for the
+    current user, so administrator rights are not needed.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$ProfilePath,
+    [switch]$SkipModules,
     [switch]$SkipFont,
     [switch]$SkipTerminalSettings,
     [switch]$InstallBitwarden,
@@ -46,12 +54,14 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $RepoRawBase = "https://raw.githubusercontent.com/TheDarthAdmin/Powershell/$SourceBranch"
+$LocalRoot   = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
 
 #region Helpers ---------------------------------------------------------------
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$Message) Write-Host "    $Message" -ForegroundColor Green }
 function Write-Skip { param([string]$Message) Write-Host "    $Message" -ForegroundColor DarkGray }
+function Write-Fail { param([string]$Message) Write-Host "    $Message" -ForegroundColor Yellow }
 
 function Backup-File {
     <#  Copies a file next to itself with a timestamp. Returns the backup path. #>
@@ -66,15 +76,16 @@ function Backup-File {
     return $backup
 }
 
-function Save-RemoteFile {
+function Install-ConfigFile {
     <#
-        Downloads to a temp file first and only then moves it into place, so a
-        failed or truncated download can never destroy the existing file.
-        Optionally validates that the payload is parseable JSON.
+        Puts a file in place from the local checkout if it is there, otherwise
+        from GitHub. Writes to a temp file first and only then moves it into
+        position, so a failed or truncated download can never destroy the file
+        being replaced.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$FileName,
         [Parameter(Mandatory)][string]$Destination,
         [switch]$ValidateJson
     )
@@ -82,10 +93,20 @@ function Save-RemoteFile {
     $temp = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
 
     try {
-        Invoke-WebRequest -Uri $Uri -OutFile $temp -UseBasicParsing
+        $localSource = if ($LocalRoot) { Join-Path $LocalRoot $FileName }
+
+        if ($localSource -and (Test-Path -LiteralPath $localSource)) {
+            Copy-Item -LiteralPath $localSource -Destination $temp -Force
+            Write-Skip "Source: local file $FileName"
+        }
+        else {
+            $uri = "$RepoRawBase/$FileName"
+            Invoke-WebRequest -Uri $uri -OutFile $temp -UseBasicParsing
+            Write-Skip "Source: $uri"
+        }
 
         if ((Get-Item -LiteralPath $temp).Length -eq 0) {
-            throw "Downloaded file from $Uri was empty."
+            throw "Source file '$FileName' was empty."
         }
 
         if ($ValidateJson) {
@@ -94,23 +115,165 @@ function Save-RemoteFile {
 
         $parent = Split-Path -Path $Destination -Parent
         if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            # Report the path we failed on. "Could not find a part of the path"
+            # with no path in it is not a useful error message.
+            try   { New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null }
+            catch { throw "Could not create the folder '$parent': $($_.Exception.Message)" }
         }
 
         Backup-File -Path $Destination | Out-Null
-        Move-Item -LiteralPath $temp -Destination $Destination -Force
+
+        try   { Move-Item -LiteralPath $temp -Destination $Destination -Force -ErrorAction Stop }
+        catch { throw "Could not write to '$Destination': $($_.Exception.Message)" }
     }
     finally {
-        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $temp) {
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Resolve-ProfilePath {
+    <#
+        Works out where the PowerShell 7 profile belongs and returns a path whose
+        folder exists and is writable.
+
+        $PROFILE cannot be trusted here on its own. Run this script from Windows
+        PowerShell 5.1 and $PROFILE points at Documents\WindowsPowerShell\,
+        where a "#Requires -Version 7.0" profile will refuse to load. And when
+        Documents is redirected to OneDrive, the registry value $PROFILE is built
+        from can point at a folder that no longer exists, which is what produces
+        "Could not find a part of the path". So: build a candidate list, and pick
+        the first one we can actually create a folder in.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    # If we are already in PowerShell 7, its own answer is the best answer.
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $candidates.Add($PROFILE.CurrentUserCurrentHost)
+    }
+
+    $docs = try { [Environment]::GetFolderPath('MyDocuments') } catch { $null }
+    if ($docs) { $candidates.Add((Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1')) }
+
+    if ($env:OneDrive) {
+        $candidates.Add((Join-Path $env:OneDrive 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1'))
+    }
+
+    if ($env:OneDriveCommercial -and $env:OneDriveCommercial -ne $env:OneDrive) {
+        $candidates.Add((Join-Path $env:OneDriveCommercial 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1'))
+    }
+
+    $candidates.Add((Join-Path $env:USERPROFILE 'Documents\PowerShell\Microsoft.PowerShell_profile.ps1'))
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+
+        $folder = Split-Path -Path $candidate -Parent
+        if (-not $folder) { continue }
+
+        if (Test-Path -LiteralPath $folder) {
+            Write-Verbose "Profile folder already exists: $folder"
+            return $candidate
+        }
+
+        try {
+            New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+            Write-Verbose "Created profile folder: $folder"
+            return $candidate
+        }
+        catch {
+            Write-Verbose "Cannot use '$folder': $($_.Exception.Message)"
+        }
+    }
+
+    return $null
+}
+
+function Initialize-PackageSource {
+    <#
+        The "Administrator rights are required" error from Install-Package comes
+        from PowerShellGet 1.0.0.1, the version that ships with Windows
+        PowerShell 5.1: its NuGet provider bootstrap ignores -Scope CurrentUser
+        and tries to write to Program Files. The module install itself then
+        usually succeeds anyway, which is why the first run reported both an
+        error and a success. Bootstrap the provider per-user up front so the
+        error never appears.
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $nuget = Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue |
+                 Sort-Object Version -Descending | Select-Object -First 1
+
+        if (-not $nuget -or $nuget.Version -lt [version]'2.8.5.201') {
+            Write-Skip 'Bootstrapping the NuGet package provider for the current user...'
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 `
+                -Scope CurrentUser -Force -ErrorAction Stop | Out-Null
+        }
+    }
+    catch {
+        Write-Verbose "NuGet provider bootstrap failed: $($_.Exception.Message)"
+    }
+
+    try {
+        $gallery = Get-PSRepository -Name PSGallery -ErrorAction Stop
+        if ($gallery.InstallationPolicy -ne 'Trusted') {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop
+            Write-Skip 'PSGallery marked as trusted for this user.'
+        }
+    }
+    catch {
+        Write-Verbose "Could not configure PSGallery: $($_.Exception.Message)"
+    }
+}
+
+function Install-GalleryModule {
+    <#
+        Installs a module and then checks whether it is actually there. The
+        original trusted Install-Module's error stream, which reports failures
+        it goes on to recover from, so the script printed "installed" directly
+        underneath an error and would have printed it on a real failure too.
+        Presence on disk is the only reliable signal.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][string]$Name)
+
+    if (Get-Module -ListAvailable -Name $Name) {
+        Write-Skip "$Name is already installed."
+        return
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($Name, 'Install-Module')) { return }
+
+    $installErrors = $null
+    Install-Module -Name $Name -Repository PSGallery -Scope CurrentUser `
+        -Force -AllowClobber -SkipPublisherCheck `
+        -ErrorAction SilentlyContinue -WarningAction SilentlyContinue `
+        -ErrorVariable installErrors
+
+    $installed = Get-Module -ListAvailable -Name $Name |
+                 Sort-Object Version -Descending | Select-Object -First 1
+
+    if ($installed) {
+        Write-Ok "$Name $($installed.Version) installed."
+        if ($installErrors) {
+            Write-Verbose "$Name installed despite: $($installErrors[0].Exception.Message)"
+        }
+    }
+    else {
+        $reason = if ($installErrors) { $installErrors[0].Exception.Message } else { 'unknown error' }
+        Write-Fail "$Name was NOT installed: $reason"
     }
 }
 
 function Test-FontInstalled {
     <#
-        The original checked $_.PSChildName on the result of Get-ItemProperty.
-        That property is the name of the registry KEY ("Fonts"), not the font
-        value names, so the test could never match and the font was reinstalled
-        on every run. Read the value names instead, and check the per-user hive
+        Reads the font value names out of the registry. Checks the per-user hive
         as well as the machine hive.
     #>
     [CmdletBinding()]
@@ -132,9 +295,13 @@ function Test-FontInstalled {
 function Install-NerdFont {
     <#
         Installs into %LOCALAPPDATA%\Microsoft\Windows\Fonts and registers under
-        HKCU. The original copied into C:\Windows\Fonts *and* called
-        Shell.Application CopyHere for the same file, which needs admin rights
-        and pops a "file already exists" dialog on the second pass.
+        HKCU, so no elevation is needed.
+
+        Font files already in place are left alone. A .ttf loaded by a running
+        process cannot be overwritten, and there is no reason to: if the file is
+        already the right size it is the same font, so skip the copy and just
+        make sure the registry entry exists. One locked file no longer aborts
+        the whole install.
     #>
     [CmdletBinding()]
     param(
@@ -156,26 +323,61 @@ function Install-NerdFont {
         }
         Expand-Archive -LiteralPath $zipPath -DestinationPath $extractPath -Force
 
-        $fonts = Get-ChildItem -LiteralPath $extractPath -Include '*.ttf', '*.otf' -File -Recurse
-        if (-not $fonts) { throw "No font files found in the archive." }
+        $fonts = @(Get-ChildItem -LiteralPath $extractPath -Include '*.ttf', '*.otf' -File -Recurse)
+        if ($fonts.Count -eq 0) { throw 'No font files found in the archive.' }
 
         New-Item -ItemType Directory -Path $fontDir -Force | Out-Null
         if (-not (Test-Path -LiteralPath $regPath)) { New-Item -Path $regPath -Force | Out-Null }
 
-        $count = 0
+        $copied = 0; $alreadyThere = 0; $failed = @()
+
         foreach ($font in $fonts) {
             $dest = Join-Path $fontDir $font.Name
-            Copy-Item -LiteralPath $font.FullName -Destination $dest -Force
+
+            $existing = if (Test-Path -LiteralPath $dest) { Get-Item -LiteralPath $dest } else { $null }
+
+            if ($existing -and $existing.Length -eq $font.Length) {
+                $alreadyThere++
+            }
+            else {
+                try {
+                    Copy-Item -LiteralPath $font.FullName -Destination $dest -Force -ErrorAction Stop
+                    $copied++
+                }
+                catch {
+                    if ($existing) {
+                        # Locked by a running app but already present. Fine.
+                        $alreadyThere++
+                        Write-Verbose "In use, keeping existing copy: $($font.Name)"
+                    }
+                    else {
+                        $failed += $font.Name
+                        Write-Verbose "Failed to copy $($font.Name): $($_.Exception.Message)"
+                        continue
+                    }
+                }
+            }
 
             $type    = if ($font.Extension -eq '.otf') { '(OpenType)' } else { '(TrueType)' }
             $regName = '{0} {1}' -f [IO.Path]::GetFileNameWithoutExtension($font.Name), $type
 
-            New-ItemProperty -Path $regPath -Name $regName -Value $dest `
-                -PropertyType String -Force | Out-Null
-            $count++
+            try {
+                New-ItemProperty -Path $regPath -Name $regName -Value $dest `
+                    -PropertyType String -Force -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Verbose "Could not register $regName : $($_.Exception.Message)"
+            }
         }
 
-        Write-Ok "$FriendlyName installed ($count files, current user only)."
+        $summary = "${FriendlyName}: $copied file(s) installed"
+        if ($alreadyThere) { $summary += ", $alreadyThere already present or in use" }
+        Write-Ok "$summary."
+
+        if ($failed.Count -gt 0) {
+            Write-Fail "$($failed.Count) file(s) could not be installed: $($failed -join ', ')"
+            Write-Skip 'Close Windows Terminal and any editors, then run the script again.'
+        }
     }
     finally {
         Remove-Item -LiteralPath $zipPath     -Force -Recurse -ErrorAction SilentlyContinue
@@ -194,8 +396,6 @@ function Get-TerminalSettingsPath {
         "$env:LOCALAPPDATA\Microsoft\Windows Terminal\settings.json"
     )
 
-    # Prefer a path that already exists; otherwise the parent folder existing is
-    # good enough to tell us Terminal is installed but has never been launched.
     foreach ($path in $candidates) { if (Test-Path -LiteralPath $path) { return $path } }
     foreach ($path in $candidates) {
         if (Test-Path -LiteralPath (Split-Path $path -Parent)) { return $path }
@@ -217,7 +417,7 @@ function Install-WingetPackage {
     }
 
     if (-not (Get-Command winget -CommandType Application -ErrorAction SilentlyContinue)) {
-        Write-Warning "winget is not available. Install $FriendlyName manually."
+        Write-Fail "winget is not available. Install $FriendlyName manually."
         return
     }
 
@@ -225,7 +425,7 @@ function Install-WingetPackage {
         --accept-source-agreements --accept-package-agreements --silent
 
     if ($LASTEXITCODE -eq 0) { Write-Ok "$FriendlyName installed." }
-    else { Write-Warning "winget returned exit code $LASTEXITCODE for $FriendlyName." }
+    else { Write-Fail "winget returned exit code $LASTEXITCODE for $FriendlyName." }
 }
 
 #endregion
@@ -235,36 +435,41 @@ function Install-WingetPackage {
 Write-Host ''
 Write-Host 'PowerShell and Windows Terminal setup' -ForegroundColor White
 Write-Host '-------------------------------------' -ForegroundColor DarkGray
+Write-Host "Running under PowerShell $($PSVersionTable.PSVersion)" -ForegroundColor DarkGray
+
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    Write-Host ''
+    Write-Fail 'This is Windows PowerShell 5.1. The profile targets PowerShell 7,'
+    Write-Skip 'so it will be written to the PowerShell 7 profile location rather'
+    Write-Skip "than this shell's. Install PowerShell 7 with:"
+    Write-Skip '  winget install Microsoft.PowerShell'
+}
 
 # --- 1. Modules -------------------------------------------------------------
 Write-Step 'PowerShell modules'
 
-$modules = @('Terminal-Icons', 'PowerColorLS')
-
-# PSReadLine ships in the box, so a plain -ListAvailable check never installs a
-# newer build. Only pull from the gallery when the shipped version is too old
-# for ListView predictions.
-$psrl = Get-Module -ListAvailable -Name PSReadLine |
-        Sort-Object Version -Descending | Select-Object -First 1
-if (-not $psrl -or $psrl.Version -lt [version]'2.2.0') {
-    $modules += 'PSReadLine'
+if ($SkipModules) {
+    Write-Skip 'Skipped (-SkipModules).'
 }
+else {
+    Initialize-PackageSource
 
-foreach ($module in $modules) {
-    if (Get-Module -ListAvailable -Name $module) {
-        Write-Skip "$module is already installed."
-        continue
+    $modules = @('Terminal-Icons', 'PowerColorLS')
+
+    # PSReadLine ships in the box, so a plain -ListAvailable check never
+    # installs a newer build. Only pull from the gallery when the shipped
+    # version is too old for ListView predictions.
+    $psrl = Get-Module -ListAvailable -Name PSReadLine |
+            Sort-Object Version -Descending | Select-Object -First 1
+    if (-not $psrl -or $psrl.Version -lt [version]'2.2.0') {
+        $modules += 'PSReadLine'
+    }
+    else {
+        Write-Skip "PSReadLine $($psrl.Version) is recent enough."
     }
 
-    if ($PSCmdlet.ShouldProcess($module, 'Install-Module')) {
-        try {
-            Install-Module -Name $module -Repository PSGallery -Scope CurrentUser `
-                -Force -AllowClobber -SkipPublisherCheck
-            Write-Ok "$module installed."
-        }
-        catch {
-            Write-Warning "Could not install $module : $($_.Exception.Message)"
-        }
+    foreach ($module in $modules) {
+        Install-GalleryModule -Name $module
     }
 }
 
@@ -278,26 +483,21 @@ if ($InstallBitwarden) {
 }
 
 # --- 3. Hack Nerd Font ------------------------------------------------------
-# The original used 'return' here when the font was already present. At script
-# scope that ends the ENTIRE script, so the profile and Terminal settings were
-# silently never installed. Use an if/else instead.
+Write-Step 'Hack Nerd Font'
+
 if ($SkipFont) {
-    Write-Step 'Hack Nerd Font'
     Write-Skip 'Skipped (-SkipFont).'
 }
-else {
-    Write-Step 'Hack Nerd Font'
-    if (Test-FontInstalled -NamePattern 'Hack Nerd Font') {
-        Write-Skip 'Already installed.'
+elseif (Test-FontInstalled -NamePattern 'Hack Nerd Font') {
+    Write-Skip 'Already registered.'
+}
+elseif ($PSCmdlet.ShouldProcess('Hack Nerd Font', 'Install')) {
+    try {
+        $fontUrl = "https://github.com/ryanoasis/nerd-fonts/releases/download/$NerdFontVersion/Hack.zip"
+        Install-NerdFont -Url $fontUrl -FriendlyName 'Hack Nerd Font'
     }
-    elseif ($PSCmdlet.ShouldProcess('Hack Nerd Font', 'Install')) {
-        try {
-            $fontUrl = "https://github.com/ryanoasis/nerd-fonts/releases/download/$NerdFontVersion/Hack.zip"
-            Install-NerdFont -Url $fontUrl -FriendlyName 'Hack Nerd Font'
-        }
-        catch {
-            Write-Warning "Font installation failed: $($_.Exception.Message)"
-        }
+    catch {
+        Write-Fail "Font installation failed: $($_.Exception.Message)"
     }
 }
 
@@ -305,21 +505,22 @@ else {
 Write-Step 'PowerShell profile'
 
 if (-not $ProfilePath) {
-    # $PROFILE already points at the OneDrive-redirected Documents folder when
-    # Documents is redirected, so there is nothing to ask the user about. The
-    # original prompt also called 'exit' on bad input, which kills the whole
-    # host session when the script is piped into iex.
-    $ProfilePath = $PROFILE.CurrentUserCurrentHost
+    $ProfilePath = Resolve-ProfilePath
 }
 
-try {
-    if ($PSCmdlet.ShouldProcess($ProfilePath, 'Install profile')) {
-        Save-RemoteFile -Uri "$RepoRawBase/MyPwshProfile.ps1" -Destination $ProfilePath
+if (-not $ProfilePath) {
+    Write-Fail 'Could not find a writable location for the profile.'
+    Write-Skip 'Pass one explicitly, for example:'
+    Write-Skip '  .\ShellSetup.ps1 -ProfilePath "$env:USERPROFILE\Documents\PowerShell\Microsoft.PowerShell_profile.ps1"'
+}
+elseif ($PSCmdlet.ShouldProcess($ProfilePath, 'Install profile')) {
+    try {
+        Install-ConfigFile -FileName 'MyPwshProfile.ps1' -Destination $ProfilePath
         Write-Ok "Profile installed at $ProfilePath"
     }
-}
-catch {
-    Write-Warning "Could not install the profile: $($_.Exception.Message)"
+    catch {
+        Write-Fail "Could not install the profile: $($_.Exception.Message)"
+    }
 }
 
 # --- 5. Windows Terminal settings -------------------------------------------
@@ -332,24 +533,45 @@ else {
     $terminalSettings = Get-TerminalSettingsPath
 
     if (-not $terminalSettings) {
-        Write-Warning 'Windows Terminal was not found. Skipping its settings.'
+        Write-Fail 'Windows Terminal was not found. Skipping its settings.'
     }
     elseif ($PSCmdlet.ShouldProcess($terminalSettings, 'Replace settings.json')) {
         try {
-            Save-RemoteFile -Uri "$RepoRawBase/settings.json" `
-                            -Destination $terminalSettings -ValidateJson
+            Install-ConfigFile -FileName 'settings.json' -Destination $terminalSettings -ValidateJson
             Write-Ok "Terminal settings installed at $terminalSettings"
             Write-Skip 'Your previous settings.json is kept as a .bak- file next to it.'
         }
         catch {
-            Write-Warning "Could not install the Terminal settings: $($_.Exception.Message)"
+            Write-Fail "Could not install the Terminal settings: $($_.Exception.Message)"
         }
     }
 }
 
-# --- Done -------------------------------------------------------------------
+# --- 6. Verify --------------------------------------------------------------
+Write-Step 'Result'
+
+foreach ($module in @('Terminal-Icons', 'PowerColorLS', 'PSReadLine')) {
+    $found = Get-Module -ListAvailable -Name $module |
+             Sort-Object Version -Descending | Select-Object -First 1
+    if ($found) { Write-Ok  "$module $($found.Version)" }
+    else        { Write-Fail "$module missing" }
+}
+
+if (Get-Command oh-my-posh -CommandType Application -ErrorAction SilentlyContinue) {
+    Write-Ok 'oh-my-posh on PATH'
+}
+else {
+    Write-Fail 'oh-my-posh not on PATH in this session (open a new tab)'
+}
+
+if (Test-FontInstalled -NamePattern 'Hack Nerd Font') { Write-Ok 'Hack Nerd Font registered' }
+else { Write-Fail 'Hack Nerd Font not registered' }
+
+if ($ProfilePath -and (Test-Path -LiteralPath $ProfilePath)) { Write-Ok "Profile at $ProfilePath" }
+else { Write-Fail 'Profile not installed' }
+
 Write-Host ''
-Write-Host 'Setup complete. Restart Windows Terminal to pick up the changes.' -ForegroundColor Green
+Write-Host 'Done. Restart Windows Terminal to pick up the changes.' -ForegroundColor Green
 Write-Host ''
 
 #endregion
