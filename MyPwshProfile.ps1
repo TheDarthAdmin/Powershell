@@ -19,7 +19,7 @@
 # locally in $env:POSH_THEMES_PATH, so use that copy.
 if (Get-Command oh-my-posh -CommandType Application -ErrorAction SilentlyContinue) {
     $poshTheme = if ($env:POSH_THEMES_PATH) {
-        Join-Path $env:POSH_THEMES_PATH 'cloud-native-azure.omp.json'
+        Join-Path $env:POSH_THEMES_PATH 'kali.omp.json'
     }
 
     if ($poshTheme -and (Test-Path -LiteralPath $poshTheme)) {
