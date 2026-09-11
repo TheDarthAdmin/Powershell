@@ -17,20 +17,33 @@
 # The original fetched the theme from GitHub on every single shell start, which
 # added latency and broke the prompt when offline. Oh My Posh ships its themes
 # locally in $env:POSH_THEMES_PATH, so use that copy.
-if (Get-Command oh-my-posh -CommandType Application -ErrorAction SilentlyContinue) {
-    $poshTheme = if ($env:POSH_THEMES_PATH) {
-        Join-Path $env:POSH_THEMES_PATH 'kali.omp.json'
-    }
+$PoshThemeName = 'kali'
 
-    if ($poshTheme -and (Test-Path -LiteralPath $poshTheme)) {
-        oh-my-posh init pwsh --config $poshTheme | Invoke-Expression
+if (Get-Command oh-my-posh -CommandType Application -ErrorAction SilentlyContinue) {
+    $poshDirs = @("$env:LOCALAPPDATA\oh-my-posh\themes")
+
+    if ($env:POSH_THEMES_PATH) {
+        $poshDirs += $env:POSH_THEMES_PATH
     }
     else {
-        oh-my-posh init pwsh | Invoke-Expression   # falls back to the default theme
+        # The installer sets POSH_THEMES_PATH, so it is missing in sessions that
+        # started before the install. Work it out from where the exe lives.
+        $binDir = Split-Path (Get-Command oh-my-posh -CommandType Application).Source -Parent
+        $poshDirs += (Join-Path (Split-Path $binDir -Parent) 'themes')
+        $poshDirs += (Join-Path $binDir 'themes')
     }
-}
-else {
-    Write-Verbose 'oh-my-posh not found. Run ShellSetup.ps1 to install it.'
+
+    $poshTheme = $null
+    foreach ($dir in $poshDirs) {
+        if (-not $dir) { continue }
+        $candidate = Join-Path $dir "$PoshThemeName.omp.json"
+        if (Test-Path -LiteralPath $candidate) { $poshTheme = $candidate; break }
+    }
+
+    Write-Host "theme: $(if ($poshTheme) { $poshTheme } else { 'NOT FOUND, using default' })" -ForegroundColor DarkGray
+
+    if ($poshTheme) { oh-my-posh init pwsh --config $poshTheme | Invoke-Expression }
+    else            { oh-my-posh init pwsh | Invoke-Expression }
 }
 
 # ---------------------------------------------------------------------------
