@@ -82,6 +82,21 @@ param(
     [switch]$NoRelaunch
 )
 
+# 'irm ... | iex' runs this file as loose text, not as a script: the param
+# block and [CmdletBinding()] are ignored, so there is no $PSCmdlet, -WhatIf does
+# nothing, and Set-StrictMode and $ErrorActionPreference would leak into your
+# shell. Detect that and re-run the same code as a script block, which binds
+# everything properly and keeps its settings to itself.
+if (-not $ExecutionContext.SessionState.PSVariable.Get('PSCmdlet')) {
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    }
+    $__setupUrl = 'https://raw.githubusercontent.com/TheDarthAdmin/Powershell/main/ShellSetup.ps1'
+    & ([scriptblock]::Create((Invoke-RestMethod -Uri $__setupUrl -UseBasicParsing)))
+    Remove-Variable -Name __setupUrl -ErrorAction Ignore
+    return
+}
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
