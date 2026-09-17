@@ -11,76 +11,26 @@
     "tabWidthMode": "titleLength",
     "keybindings":
     [
-        {
-            "id": "Terminal.CopyToClipboard",
-            "keys": "ctrl+c"
-        },
-        {
-            "id": "Terminal.PasteFromClipboard",
-            "keys": "ctrl+v"
-        },
-        {
-            "id": "Terminal.FindText",
-            "keys": "ctrl+shift+f"
-        },
-        {
-            "id": "Terminal.DuplicatePaneAuto",
-            "keys": "alt+shift+d"
-        },
-        {
-            "id": "Terminal.SplitPaneRight",
-            "keys": "alt+shift+plus"
-        },
-        {
-            "id": "Terminal.SplitPaneDown",
-            "keys": "alt+shift+minus"
-        },
-        {
-            "id": "Terminal.ClosePane",
-            "keys": "ctrl+shift+w"
-        },
-        {
-            "id": "Terminal.MoveFocusLeft",
-            "keys": "alt+left"
-        },
-        {
-            "id": "Terminal.MoveFocusRight",
-            "keys": "alt+right"
-        },
-        {
-            "id": "Terminal.MoveFocusUp",
-            "keys": "alt+up"
-        },
-        {
-            "id": "Terminal.MoveFocusDown",
-            "keys": "alt+down"
-        },
-        {
-            "id": "Terminal.OpenNewTabDropdown",
-            "keys": "ctrl+shift+space"
-        },
-        {
-            "id": "Terminal.ResetFontSize",
-            "keys": "ctrl+0"
-        },
-        {
-            "id": "Terminal.IncreaseFontSize",
-            "keys": "ctrl+plus"
-        },
-        {
-            "id": "Terminal.DecreaseFontSize",
-            "keys": "ctrl+minus"
-        },
-        {
-            "id": "Terminal.ToggleFocusMode",
-            "keys": "f11"
-        }
+        { "id": "Terminal.CopyToClipboard", "keys": "ctrl+c" },
+        { "id": "Terminal.PasteFromClipboard", "keys": "ctrl+v" },
+        { "id": "Terminal.FindText", "keys": "ctrl+shift+f" },
+        { "id": "Terminal.DuplicatePaneAuto", "keys": "alt+shift+d" },
+        { "id": "Terminal.SplitPaneRight", "keys": "alt+shift+plus" },
+        { "id": "Terminal.SplitPaneDown", "keys": "alt+shift+minus" },
+        { "id": "Terminal.ClosePane", "keys": "ctrl+shift+w" },
+        { "id": "Terminal.MoveFocusLeft", "keys": "alt+left" },
+        { "id": "Terminal.MoveFocusRight", "keys": "alt+right" },
+        { "id": "Terminal.MoveFocusUp", "keys": "alt+up" },
+        { "id": "Terminal.MoveFocusDown", "keys": "alt+down" },
+        { "id": "Terminal.OpenNewTabDropdown", "keys": "ctrl+shift+space" },
+        { "id": "Terminal.ResetFontSize", "keys": "ctrl+0" },
+        { "id": "Terminal.IncreaseFontSize", "keys": "ctrl+plus" },
+        { "id": "Terminal.DecreaseFontSize", "keys": "ctrl+minus" },
+        { "id": "Terminal.ToggleFocusMode", "keys": "f11" }
     ],
     "newTabMenu":
     [
-        {
-            "type": "remainingProfiles"
-        }
+        { "type": "remainingProfiles" }
     ],
     "profiles":
     {
@@ -91,8 +41,11 @@
                 "face": "Hack Nerd Font",
                 "size": 11
             },
-            "colorScheme": "One Half Dark",
+            "colorScheme": "DarthAdmin",
+            "cursorShape": "bar",
             "historySize": 9001,
+            "intenseTextStyle": "bright",
+            "padding": "8",
             "scrollbarState": "visible",
             "snapOnInput": true,
             "startingDirectory": "%USERPROFILE%"
@@ -100,15 +53,32 @@
         "list":
         [
             {
-                "backgroundImage": "https://wallpaperaccess.com/full/99791.jpg",
-                "backgroundImageOpacity": 0.8,
-                "backgroundImageStretchMode": "uniformToFill",
                 "guid": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
-                "hidden": false,
                 "name": "PowerShell",
-                "opacity": 80,
                 "source": "Windows.Terminal.PowershellCore",
-                "useAcrylic": false
+                "hidden": false,
+                "backgroundImage": "%LOCALAPPDATA%\\PwshShellSetup\\darthadmin-terminal.png",
+                "backgroundImageAlignment": "bottomRight",
+                "backgroundImageOpacity": 0.85,
+                "backgroundImageStretchMode": "uniformToFill",
+                "opacity": 100,
+                "useAcrylic": false,
+                "tabColor": "#1A1D24"
+            },
+            {
+                "guid": "{a3d5c7e1-8b2f-4d6a-9c1e-5f7b3d9a2c41}",
+                "name": "PowerShell (Admin)",
+                "commandline": "pwsh.exe -NoLogo",
+                "elevate": true,
+                "icon": "ms-appx:///ProfileIcons/pwsh.png",
+                "hidden": false,
+                "backgroundImage": "%LOCALAPPDATA%\\PwshShellSetup\\darthadmin-terminal.png",
+                "backgroundImageAlignment": "bottomRight",
+                "backgroundImageOpacity": 0.85,
+                "backgroundImageStretchMode": "uniformToFill",
+                "opacity": 100,
+                "useAcrylic": false,
+                "tabColor": "#8B1A2B"
             },
             {
                 "commandline": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
@@ -130,6 +100,31 @@
             }
         ]
     },
-    "schemes": [],
+    "schemes":
+    [
+        {
+            "name": "DarthAdmin",
+            "background": "#07080B",
+            "foreground": "#D7DAE0",
+            "cursorColor": "#E0314B",
+            "selectionBackground": "#3A1A22",
+            "black": "#1B1D23",
+            "red": "#E0314B",
+            "green": "#98C379",
+            "yellow": "#E5C07B",
+            "blue": "#61AFEF",
+            "purple": "#C678DD",
+            "cyan": "#56B6C2",
+            "white": "#D7DAE0",
+            "brightBlack": "#5C6370",
+            "brightRed": "#FF5C70",
+            "brightGreen": "#B5E08A",
+            "brightYellow": "#F0D197",
+            "brightBlue": "#82C4F5",
+            "brightPurple": "#D99BE8",
+            "brightCyan": "#7FD1DB",
+            "brightWhite": "#F2F4F8"
+        }
+    ],
     "themes": []
 }

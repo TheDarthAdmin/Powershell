@@ -1,11 +1,13 @@
 # PowerShell & Windows Terminal Setup
 
 An opinionated setup for PowerShell 7 on Windows: a Nerd Font, an Oh My Posh
-prompt, predictive history, file-type icons, and a few Bitwarden and networking
-helpers.
+prompt that works offline, predictive IntelliSense, file-type icons, a custom
+colour scheme and background, and a handful of Microsoft 365 / Intune helpers.
 
-The setup script is safe to run more than once. It skips what is already
-installed and backs up any file it replaces.
+The setup script is safe to run more than once. It skips what is already in
+place and backs up any file it changes.
+
+![Terminal background](assets/darthadmin-terminal.png)
 
 ---
 
@@ -14,22 +16,23 @@ installed and backs up any file it replaces.
 | | |
 |---|---|
 | OS | Windows 10 1809 or later / Windows 11 |
-| Shell | PowerShell 7.0+ (`winget install Microsoft.PowerShell`) |
+| Shell | PowerShell 7.2+ recommended (installed for you if missing) |
 | Terminal | Windows Terminal (Store, Preview, or unpackaged) |
-| Package manager | winget, for Oh My Posh and the Bitwarden CLI |
+| Package manager | winget |
 
-Administrator rights are **not** required. The font is installed for the
+Administrator rights are **not** required. Fonts and modules install for the
 current user only.
 
 ---
 
 ## Install
 
-Clone or download the repo and run the script:
+Clone the repo and run the script:
 
 ```powershell
 git clone https://github.com/TheDarthAdmin/Powershell.git
 cd Powershell
+.\ShellSetup.ps1 -WhatIf   # see the plan first
 .\ShellSetup.ps1
 ```
 
@@ -42,7 +45,7 @@ irm https://raw.githubusercontent.com/TheDarthAdmin/Powershell/main/ShellSetup.p
 To pass options through the one-liner, wrap it in a script block:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/TheDarthAdmin/Powershell/main/ShellSetup.ps1))) -SkipTerminalSettings
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/TheDarthAdmin/Powershell/main/ShellSetup.ps1))) -InstallExtras
 ```
 
 Restart Windows Terminal when it finishes.
@@ -50,113 +53,143 @@ Restart Windows Terminal when it finishes.
 > Piping a script from the internet into `iex` runs whatever is at that URL with
 > your permissions. Read the script first — that goes for this one too.
 
+Started from Windows PowerShell 5.1, the script installs PowerShell 7 if needed
+and re-runs itself under `pwsh`, so modules end up where PowerShell 7 looks.
+
 ### Options
 
 | Parameter | Effect |
 |---|---|
-| `-ProfilePath <path>` | Write the profile somewhere other than `$PROFILE` |
-| `-SkipFont` | Leave fonts alone |
-| `-SkipTerminalSettings` | Leave `settings.json` alone |
-| `-InstallBitwarden` | Also install the Bitwarden CLI |
-| `-NerdFontVersion <tag>` | Pin a different Nerd Fonts release (default `v3.4.0`) |
 | `-WhatIf` | Show what would happen without changing anything |
-
-Start with `-WhatIf` if you want to see the plan before committing to it.
+| `-Diagnose` | Print paths, tool versions and writability checks, then exit |
+| `-InstallExtras` | Also install fzf + PSFzf and the Ookla Speedtest CLI |
+| `-TerminalSettingsMode Merge\|Replace` | `Merge` (default) keeps your own profiles, schemes and key bindings; `Replace` overwrites `settings.json` |
+| `-PoshTheme <name>` | Oh My Posh theme to store locally (default `kali`; keep in sync with the profile) |
+| `-ProfilePath <path>` | Write the profile somewhere other than `$PROFILE` |
+| `-ModuleRoot <path>` | Install modules into a specific folder |
+| `-NerdFontVersion <tag>` | Pin a Nerd Fonts release, e.g. `v3.4.0` (default `latest`) |
+| `-SourceBranch <name>` | Branch to download files from when not running from a checkout (default `main`) |
+| `-SkipModules` | Leave modules alone |
+| `-SkipFont` | Leave fonts alone |
+| `-SkipBackground` | Do not install the background image |
+| `-SkipTerminalSettings` | Leave `settings.json` alone |
 
 ---
 
 ## What is in the repo
 
+| Path | Purpose |
+|---|---|
+| `ShellSetup.ps1` | Installer |
+| `MyPwshProfile.ps1` | The PowerShell 7 profile |
+| `settings.json` | Windows Terminal settings, merged into yours |
+| `assets/darthadmin-terminal.png` | Terminal background (2560×1440) |
+| `PSScriptAnalyzerSettings.psd1` | Lint rules, used by the GitHub Action |
+
 ### `ShellSetup.ps1`
 
 Installs, in order:
 
-1. **Modules** — Terminal-Icons and PowerColorLS, plus PSReadLine from the
-   gallery only when the version shipped with your PowerShell is older than
-   2.2.
-2. **Oh My Posh** — via winget, skipped if `oh-my-posh` already resolves.
-3. **Hack Nerd Font** — downloaded from the Nerd Fonts releases and registered
-   under `HKCU`, so no elevation is needed.
-4. **The profile** — written to `$PROFILE.CurrentUserCurrentHost`, which
-   already resolves to the OneDrive path when Documents is redirected.
-5. **Windows Terminal settings** — the existing `settings.json` is copied to a
-   timestamped `.bak-` file first, and the download is validated as JSON before
-   anything is overwritten.
+1. **PowerShell 7** — only when started from Windows PowerShell and `pwsh` is missing.
+2. **Modules** — Terminal-Icons, PowerColorLS, CompletionPredictor, and
+   PSReadLine when the bundled one is older than 2.2.2 (plus PSFzf with
+   `-InstallExtras`). Falls back to unpacking the `.nupkg` directly when
+   `Install-Module` insists on admin rights.
+3. **Oh My Posh** via winget, plus a local copy of the theme in
+   `~\.config\oh-my-posh`. Current Oh My Posh builds install as MSIX and no
+   longer set `POSH_THEMES_PATH`, so the profile does not rely on it.
+4. **Hack Nerd Font** — registered under `HKCU`, no elevation needed.
+5. **The profile** — written to `$PROFILE.CurrentUserCurrentHost`, with a
+   fallback and a clear fix when a redirected Documents folder is broken.
+6. **The background** — copied to `%LOCALAPPDATA%\PwshShellSetup`, so Terminal
+   never fetches an image over the network.
+7. **Windows Terminal settings** — merged into your existing file by default.
+   Comments in your original file are not preserved, which is why a
+   timestamped `.bak-` copy is made first.
+
+Files that have not changed are left alone, so re-running does not pile up
+backups.
 
 ### `MyPwshProfile.ps1`
 
-Loaded on every shell start, so it does three things and no more: it never
-installs anything, never touches the network, and never throws. If a module is
-missing it says so under `-Verbose` and moves on.
+Never installs anything, never touches the network at startup, never throws,
+and prints nothing on a normal start. A section that fails becomes a warning.
 
-- Oh My Posh with the *cloud-native-azure* theme, read from the local theme
-  cache rather than fetched from GitHub at every prompt.
-- PSReadLine with ListView predictions, history search on the arrow keys, and
-  menu completion on Tab. Options are gated on the installed version.
-- Terminal-Icons for file-type glyphs in directory listings.
-- PowerColorLS behind the `pls` alias.
+- **Oh My Posh** with the `kali` theme, loaded from the local copy.
+- **PSReadLine** with ListView predictions from history *and* completions
+  (CompletionPredictor), history search on the arrow keys, menu completion on
+  Tab, and colours matched to the Terminal scheme.
+- **History hygiene** — PSReadLine already keeps lines containing passwords,
+  secrets or tokens out of the history file. The profile adds JWTs, SAS
+  signatures, storage account keys, client secrets and bearer tokens.
+- **Fuzzy search** (with `-InstallExtras`): `Ctrl+T` for files, `Ctrl+R` for history.
+- **Tab completion** for `winget` and `dotnet`.
+- **Terminal-Icons** in directory listings, **PowerColorLS** behind `pls`.
+- Non-interactive sessions (`pwsh -NonInteractive`) skip the prompt and key
+  bindings and only load the functions.
 
 ### `settings.json`
 
-Windows Terminal configuration: One Half Dark, Hack Nerd Font applied to every
-profile, a background image on the PowerShell profile, and pane
-splitting/navigation keybindings.
+Hack Nerd Font everywhere, the **DarthAdmin** colour scheme, the background on
+the PowerShell profile, a **PowerShell (Admin)** profile that opens elevated
+with a red tab, and pane splitting/navigation key bindings.
 
 ---
 
 ## Commands added by the profile
 
-| Command | What it does |
-|---|---|
-| `pls` | Detailed, colourised directory listing |
-| `Unlock-BitwardenVault` | Prompts for the master password and stores the session key |
-| `Lock-BitwardenVault` | Locks the vault and clears the session key |
-| `Get-BitwardenCredential <name>` | Returns a vault item as a `PSCredential` |
-| `Get-WanIp` | Your public IP address |
-| `Start-Speedtest` | Runs a bandwidth test |
-| `Edit-Profile` | Opens this profile in VS Code or Notepad |
-| `Get-ProfileLoadTime` | Times a cold shell start |
-| `which` | Alias for `Get-Command` |
+Run `Get-ProfileCommand` for the live list.
 
-Example:
+| Command | Alias | What it does |
+|---|---|---|
+| `Get-DeviceJoinStatus` | | `dsregcmd /status` as an object |
+| `Get-EntraTenantId <domain>` | | Tenant ID, region and cloud for any domain |
+| `ConvertFrom-Jwt` | | Decodes an access/ID token; adds local expiry times |
+| `Invoke-IntuneSync` | | MDM check-in (elevated) plus an IME app sync |
+| `Open-IntuneLog` | | Opens the Intune Management Extension log folder |
+| `Test-IsAdmin` | | True when the shell is elevated |
+| `Invoke-PowerColorLS` | `pls` | Detailed, colourised directory listing |
+| `New-DirectoryAndEnter` | `mkcd` | Create a folder and move into it |
+| `Update-FileTimestamp` | `touch` | Create a file or update its timestamp |
+| `..`, `...` | | Up one or two folders |
+| `Get-WanIp` | | Your public IP address |
+| `Start-Speedtest` | | Bandwidth test via the Ookla CLI |
+| `Edit-Profile` | | Opens the profile in `$env:EDITOR`, VS Code or Notepad |
+| `Get-ProfileLoadTime` | | Profile startup cost; `-Breakdown` per section |
+| | `which` | `Get-Command` |
+
+Key bindings: `↑`/`↓` history search, `Tab` menu complete, `F7` clear screen,
+`Alt+S` save the current line to history without running it.
+
+Examples:
 
 ```powershell
-Unlock-BitwardenVault
-$cred = Get-BitwardenCredential 'Azure App Registration'
-Connect-AzAccount -ServicePrincipal -Credential $cred -Tenant $tenantId
+Get-EntraTenantId contoso.com
+Get-DeviceJoinStatus | Select-Object AzureAdJoined, TenantName, DeviceId, AzureAdPrt
+(Get-Clipboard) | ConvertFrom-Jwt | Select-Object aud, scp, roles, expLocal, IsExpired
 ```
 
-### A note on the Bitwarden helpers
-
-Your master password is placed in `BW_PASSWORD` only for the duration of the
-`bw unlock` call and is wiped in a `finally` block, so it does not survive
-success, failure, or Ctrl+C. The session key stays in `BW_SESSION` for the life
-of the shell, which is how the Bitwarden CLI is designed to work — run
-`Lock-BitwardenVault` when you are done, and do not use these helpers on a
-machine you share.
-
-`Get-BitwardenCredential` returns a `PSCredential` by default so the password
-stays in a `SecureString`. Pass `-AsPlainText` if you really need the strings.
+`ConvertFrom-Jwt` decodes only; it does not validate the signature.
 
 ---
 
 ## Customising
 
-**Prompt theme** — edit the theme filename near the top of the profile. Run
-`Get-PoshThemes` to preview what is available.
+**Prompt theme** — change `PoshTheme` in the settings block at the top of the
+profile, then run `.\ShellSetup.ps1 -PoshTheme <name> -SkipModules -SkipFont`
+to store the new theme locally. Browse themes at
+<https://ohmyposh.dev/docs/themes>.
 
-**Background image** — point `backgroundImage` in `settings.json` at a local
-file instead of a URL if you would rather not fetch an image over the network
-at every launch:
+**Background** — replace `%LOCALAPPDATA%\PwshShellSetup\darthadmin-terminal.png`,
+or point `backgroundImage` elsewhere. `backgroundImageOpacity` controls how
+strongly it shows; remove the three `backgroundImage*` keys for a plain
+background. The image keeps its detail on the right and bottom so text on the
+left stays clean.
 
-```json
-"backgroundImage": "%USERPROFILE%\\Pictures\\terminal-bg.png"
-```
+**Colours** — edit the `DarthAdmin` scheme in `settings.json`, or set
+`colorScheme` to any built-in scheme.
 
-Remove the `backgroundImage` and `backgroundImageOpacity` keys for a plain
-background.
-
-**Font size** — `profiles.defaults.font.size`.
+**History filter** — extend `HistoryExtraPatterns` in the profile.
 
 ---
 
@@ -175,22 +208,36 @@ Restore one with `Copy-Item <backup> <original> -Force`.
 
 ## Troubleshooting
 
+Start with `.\ShellSetup.ps1 -Diagnose`.
+
 **The prompt shows boxes or question marks.** Windows Terminal is not using the
 Nerd Font. Check `profiles.defaults.font.face` is `Hack Nerd Font` and restart
-Terminal — newly installed fonts are not picked up by running apps.
+Terminal — running apps do not pick up newly installed fonts.
 
-**`oh-my-posh` is not recognised after setup.** winget updated PATH but your
-current session still has the old copy. Open a new tab.
+**The prompt shows `CONFIG ERROR`.** The theme file is missing. Re-run the
+setup, or check `~\.config\oh-my-posh\kali.omp.json` exists.
 
-**Predictions do not appear.** Run `Get-Module PSReadLine` — ListView needs
-2.2.0 or later. `Install-Module PSReadLine -Force -SkipPublisherCheck` and
-restart the shell.
+**`oh-my-posh` is not recognised after setup.** Open a new tab.
 
-**Shell startup feels slow.** `Get-ProfileLoadTime` gives you a number to work
-with. Most of it is usually Oh My Posh initialisation.
+**Predictions do not appear.** `Get-Module PSReadLine` should report 2.2.2 or
+later, and the window must be at least 50 columns wide for ListView.
+
+**Shell startup feels slow.** `Get-ProfileLoadTime -Breakdown` shows which
+section costs the most. It is usually Oh My Posh or Terminal-Icons.
+
+---
+
+## Development
+
+```powershell
+Install-Module PSScriptAnalyzer -Scope CurrentUser
+Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+```
+
+The same check runs on every push and pull request.
 
 ---
 
 ## Licence
 
-MIT — see `LICENSE`.
+MIT — see [`LICENSE`](LICENSE).
