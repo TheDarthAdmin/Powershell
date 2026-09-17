@@ -23,8 +23,9 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { return }
 # ---------------------------------------------------------------------------
 $ProfileSettings = @{
     # Oh My Posh theme name. ShellSetup.ps1 stores a local copy of it in
-    # ~/.config/oh-my-posh so the prompt works offline.
-    PoshTheme           = 'kali'
+    # ~/.config/oh-my-posh so the prompt works offline. 'darthadmin' is this
+    # repo's theme; built-in names such as 'kali' work too.
+    PoshTheme           = 'darthadmin'
 
     # Extra patterns that keep a command line out of the on-disk history file.
     # PSReadLine 2.2+ already filters password/secret/token/apikey/asplaintext;

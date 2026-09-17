@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09 — darthadmin theme and WSL profiles
+
+- New default Oh My Posh theme `darthadmin` in `themes/`, shared with the Bash
+  repo: blue frame and red name normally; red frame, bold name and `#` when
+  elevated. Built-in theme names still work with `-PoshTheme`.
+- Merge mode now gives WSL profiles the DarthAdmin colour scheme and background
+  (`-SkipWslProfiles` to opt out).
+
 ## 2026-09
 
 ### Removed
@@ -8,6 +16,9 @@
 - The remote background image URL in `settings.json`.
 
 ### Fixed
+- `irm | iex` install failed with "The variable '$PSCmdlet' cannot be retrieved"
+  and leaked strict mode into the calling shell. The script now re-runs itself
+  as a script block when piped into `iex`.
 - Oh My Posh theme lookup on MSIX installs, which no longer set
   `POSH_THEMES_PATH`. The theme is now stored locally by the setup.
 - Debug `theme: ...` line printed on every shell start.

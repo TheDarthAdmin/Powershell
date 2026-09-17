@@ -35,9 +35,15 @@
     Windows Terminal settings.json and keeps your other profiles, schemes and
     key bindings. Replace overwrites the file completely. Both take a backup.
 
+.PARAMETER SkipWslProfiles
+    Leave WSL profiles in Windows Terminal alone. By default, Merge mode gives
+    every WSL profile the DarthAdmin colour scheme and background, because the
+    Ubuntu and Debian packages ship their own scheme that overrides the defaults.
+
 .PARAMETER PoshTheme
     Oh My Posh theme to store locally for offline use. Must match
-    $ProfileSettings.PoshTheme in the profile. Default: kali.
+    $ProfileSettings.PoshTheme in the profile. Default: darthadmin, this repo's
+    own theme. Any built-in Oh My Posh theme name works too (kali, paradox, ...).
 
 .PARAMETER InstallExtras
     Also install fzf with PSFzf (Ctrl+T / Ctrl+R fuzzy search) and the Ookla
@@ -74,7 +80,8 @@ param(
     [switch]$SkipTerminalSettings,
     [ValidateSet('Merge', 'Replace')]
     [string]$TerminalSettingsMode = 'Merge',
-    [string]$PoshTheme       = 'kali',
+    [switch]$SkipWslProfiles,
+    [string]$PoshTheme       = 'darthadmin',
     [switch]$InstallExtras,
     [string]$NerdFontVersion = 'latest',
     [string]$SourceBranch    = 'main',
@@ -455,17 +462,40 @@ function Merge-JsonNode {
     }
 }
 
+function Test-WslTerminalProfile {
+    <#
+    .SYNOPSIS
+        True for Windows Terminal profiles that open a WSL distribution.
+    #>
+    [OutputType([bool])]
+    param($TerminalProfile)
+
+    $source  = if ($TerminalProfile.PSObject.Properties['source'])      { [string]$TerminalProfile.source }      else { '' }
+    $command = if ($TerminalProfile.PSObject.Properties['commandline']) { [string]$TerminalProfile.commandline } else { '' }
+
+    # Windows.Terminal.Wsl (built-in generator), Microsoft.WSL (WSL's own
+    # fragment), and distro packages such as CanonicalGroupLimited.Ubuntu_*.
+    ($source -match '(?i)wsl|canonical|debianproject|suse|kalilinux|almalinux|oracleamerica|redhat|fedora') -or
+    ($command -match '(?i)(^|[\\/\s"])wsl(\.exe)?(\s|"|$)')
+}
+
 function Merge-TerminalConfig {
     <#
     .SYNOPSIS
         Applies this repo's settings.json on top of an existing one and returns
         the merged JSON text.
+
+    .DESCRIPTION
+        With -StyleWslProfiles, WSL profiles also get the colour scheme and
+        background of the repo's PowerShell profile, so every tab looks alike.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$ExistingJson,
-        [Parameter(Mandatory)][string]$RepoJson
+        [Parameter(Mandatory)][string]$RepoJson,
+        [switch]$StyleWslProfiles,
+        [switch]$NoBackground
     )
 
     $target = if ([string]::IsNullOrWhiteSpace($ExistingJson)) { [PSCustomObject]@{} } else { $ExistingJson | ConvertFrom-Jsonc }
@@ -477,6 +507,35 @@ function Merge-TerminalConfig {
     }
 
     Merge-JsonNode -Target $target -Source $source
+
+    if ($StyleWslProfiles -and $target.PSObject.Properties['profiles'] -and
+        $target.profiles.PSObject.Properties['list']) {
+
+        $look = [ordered]@{}
+        if ($source.profiles.defaults.PSObject.Properties['colorScheme']) {
+            $look['colorScheme'] = $source.profiles.defaults.colorScheme
+        }
+
+        $pwshProfile = $source.profiles.list |
+            Where-Object { $_.PSObject.Properties['guid'] -and $_.guid -eq '{574e775e-4f2a-5b96-ac1e-a2962a402336}' } |
+            Select-Object -First 1
+        $copy = @('opacity', 'useAcrylic')
+        if (-not $NoBackground) {
+            $copy += 'backgroundImage', 'backgroundImageAlignment', 'backgroundImageOpacity', 'backgroundImageStretchMode'
+        }
+        foreach ($key in $copy) {
+            if ($pwshProfile -and $pwshProfile.PSObject.Properties[$key]) { $look[$key] = $pwshProfile.$key }
+        }
+
+        foreach ($terminalProfile in @($target.profiles.list)) {
+            if (-not (Test-WslTerminalProfile $terminalProfile)) { continue }
+            foreach ($entry in $look.GetEnumerator()) {
+                $terminalProfile | Add-Member -Force -NotePropertyName $entry.Key -NotePropertyValue $entry.Value
+            }
+            Write-Skip "WSL profile styled: $($terminalProfile.name)"
+        }
+    }
+
     $target | ConvertTo-Json -Depth 32
 }
 
@@ -912,23 +971,35 @@ function Install-PoshTheme {
         Stores an Oh My Posh theme in ~/.config/oh-my-posh so the profile can
         load it offline. Newer (MSIX) Oh My Posh builds no longer ship themes
         next to the executable or set POSH_THEMES_PATH.
+
+    .DESCRIPTION
+        Looks in this repo's themes folder first (local checkout, then GitHub),
+        then in POSH_THEMES_PATH, then in the Oh My Posh repository.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
 
     $destination = Join-Path $PoshThemeFolder "$Name.omp.json"
-    $temp = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+    $temp = $null
 
     try {
-        $local = if ($env:POSH_THEMES_PATH) { Join-Path $env:POSH_THEMES_PATH "$Name.omp.json" } else { $null }
-        if ($local -and (Test-Path -LiteralPath $local)) {
-            Copy-Item -LiteralPath $local -Destination $temp -Force -WhatIf:$false
-            Write-Skip "Source: $local"
+        try {
+            $temp = Get-SourceFile -FileName "themes/$Name.omp.json"
         }
-        else {
-            $uri = "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/$Name.omp.json"
-            Invoke-WebRequest -Uri $uri -OutFile $temp -UseBasicParsing
-            Write-Skip "Source: $uri"
+        catch {
+            Write-Verbose "Not a repo theme: $Name ($($_.Exception.Message))"
+            $temp = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+
+            $local = if ($env:POSH_THEMES_PATH) { Join-Path $env:POSH_THEMES_PATH "$Name.omp.json" } else { $null }
+            if ($local -and (Test-Path -LiteralPath $local)) {
+                Copy-Item -LiteralPath $local -Destination $temp -Force -WhatIf:$false
+                Write-Skip "Source: $local"
+            }
+            else {
+                $uri = "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/$Name.omp.json"
+                Invoke-WebRequest -Uri $uri -OutFile $temp -UseBasicParsing
+                Write-Skip "Source: $uri"
+            }
         }
 
         $null = Get-Content -LiteralPath $temp -Raw | ConvertFrom-Jsonc
@@ -936,7 +1007,7 @@ function Install-PoshTheme {
         Write-Ok "Theme '$Name' available at $destination"
     }
     finally {
-        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue -WhatIf:$false
+        if ($temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue -WhatIf:$false }
     }
 }
 
@@ -1223,13 +1294,17 @@ else {
         try {
             if ($TerminalSettingsMode -eq 'Replace') {
                 Install-ConfigFile -FileName 'settings.json' -Destination $terminalSettings -ValidateJson
+                if (-not $SkipWslProfiles) {
+                    Write-Skip 'WSL profiles are only styled in Merge mode; run again without -TerminalSettingsMode Replace.'
+                }
             }
             else {
                 $repoTemp = Get-SourceFile -FileName 'settings.json'
                 $outTemp  = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
                 try {
                     $existing = if (Test-Path -LiteralPath $terminalSettings) { Get-Content -LiteralPath $terminalSettings -Raw } else { '' }
-                    $merged   = Merge-TerminalConfig -ExistingJson $existing -RepoJson (Get-Content -LiteralPath $repoTemp -Raw)
+                    $merged   = Merge-TerminalConfig -ExistingJson $existing -RepoJson (Get-Content -LiteralPath $repoTemp -Raw) `
+                                    -StyleWslProfiles:(-not $SkipWslProfiles) -NoBackground:$SkipBackground
                     $null     = $merged | ConvertFrom-Json   # sanity check before touching the real file
                     [IO.File]::WriteAllText($outTemp, $merged, (New-Object System.Text.UTF8Encoding $false))
                     Install-FileFromTemp -Source $outTemp -Destination $terminalSettings

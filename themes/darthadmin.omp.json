@@ -1,0 +1,97 @@
+{
+  "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
+  "version": 4,
+  "final_space": true,
+  "palette": {
+    "frame": "#82C4F5",
+    "name": "#FF5C70",
+    "elevated": "#E0314B",
+    "path": "#F2F4F8",
+    "separator": "#8A93A3",
+    "git": "#D7DAE0",
+    "python": "#E5C07B",
+    "muted": "#8A93A3",
+    "ok": "#98C379",
+    "error": "#E0314B"
+  },
+  "blocks": [
+    {
+      "type": "prompt",
+      "alignment": "left",
+      "segments": [
+        {
+          "type": "session",
+          "style": "plain",
+          "foreground": "p:name",
+          "template": "<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>\u250c\u2500\u2500(</>{{ if .Root }}<b>{{ .UserName }}</b>{{ else }}{{ .UserName }}{{ end }}\ud83d\udc80{{ .HostName }}<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>)</>"
+        },
+        {
+          "type": "python",
+          "style": "plain",
+          "foreground": "p:python",
+          "options": {
+            "fetch_virtual_env": true
+          },
+          "template": "<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>-[</>\ue235 {{ if .Error }}{{ .Error }}{{ else }}{{ if .Venv }}{{ .Venv }} {{ end }}{{ .Full }}{{ end }}<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>]</>"
+        },
+        {
+          "type": "path",
+          "style": "plain",
+          "foreground": "p:path",
+          "options": {
+            "folder_separator_icon": "<p:separator>/</>",
+            "style": "full"
+          },
+          "template": "<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>-[</>{{ .Path }}<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>]</>"
+        },
+        {
+          "type": "git",
+          "style": "plain",
+          "foreground": "p:git",
+          "template": "<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>-[</>{{ .HEAD }}<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>]</>"
+        }
+      ]
+    },
+    {
+      "type": "prompt",
+      "alignment": "right",
+      "segments": [
+        {
+          "type": "executiontime",
+          "style": "plain",
+          "foreground": "p:muted",
+          "options": {
+            "always_enabled": true,
+            "style": "round"
+          },
+          "template": " {{ .FormattedMs }} "
+        },
+        {
+          "type": "status",
+          "style": "plain",
+          "foreground": "p:ok",
+          "foreground_templates": [
+            "{{ if gt .Code 0 }}p:error{{ end }}"
+          ],
+          "options": {
+            "always_enabled": true
+          },
+          "template": " {{ if gt .Code 0 }}\uea76{{ else }}\uf42e{{ end }} "
+        }
+      ]
+    },
+    {
+      "type": "prompt",
+      "alignment": "left",
+      "newline": true,
+      "segments": [
+        {
+          "type": "text",
+          "style": "plain",
+          "foreground": "p:frame",
+          "template": "<{{ if .Root }}p:elevated{{ else }}p:frame{{ end }}>\u2514\u2500</>{{ if .Root }}<b><p:elevated>#</></b>{{ else }}<p:frame>$</>{{ end }}"
+        }
+      ]
+    }
+  ]
+}

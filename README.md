@@ -67,7 +67,8 @@ and re-runs itself under `pwsh`, so modules end up where PowerShell 7 looks.
 | `-Diagnose` | Print paths, tool versions and writability checks, then exit |
 | `-InstallExtras` | Also install fzf + PSFzf and the Ookla Speedtest CLI |
 | `-TerminalSettingsMode Merge\|Replace` | `Merge` (default) keeps your own profiles, schemes and key bindings; `Replace` overwrites `settings.json` |
-| `-PoshTheme <name>` | Oh My Posh theme to store locally (default `kali`; keep in sync with the profile) |
+| `-PoshTheme <name>` | Oh My Posh theme to store locally (default `darthadmin`; built-in names like `kali` work too; keep in sync with the profile) |
+| `-SkipWslProfiles` | Do not give WSL profiles the DarthAdmin scheme and background |
 | `-ProfilePath <path>` | Write the profile somewhere other than `$PROFILE` |
 | `-ModuleRoot <path>` | Install modules into a specific folder |
 | `-NerdFontVersion <tag>` | Pin a Nerd Fonts release, e.g. `v3.4.0` (default `latest`) |
@@ -86,6 +87,7 @@ and re-runs itself under `pwsh`, so modules end up where PowerShell 7 looks.
 | `ShellSetup.ps1` | Installer |
 | `MyPwshProfile.ps1` | The PowerShell 7 profile |
 | `settings.json` | Windows Terminal settings, merged into yours |
+| `themes/darthadmin.omp.json` | The Oh My Posh prompt theme (shared with the Bash repo) |
 | `assets/darthadmin-terminal.png` | Terminal background (2560×1440) |
 | `PSScriptAnalyzerSettings.psd1` | Lint rules, used by the GitHub Action |
 
@@ -98,7 +100,7 @@ Installs, in order:
    PSReadLine when the bundled one is older than 2.2.2 (plus PSFzf with
    `-InstallExtras`). Falls back to unpacking the `.nupkg` directly when
    `Install-Module` insists on admin rights.
-3. **Oh My Posh** via winget, plus a local copy of the theme in
+3. **Oh My Posh** via winget, plus a local copy of the `darthadmin` theme in
    `~\.config\oh-my-posh`. Current Oh My Posh builds install as MSIX and no
    longer set `POSH_THEMES_PATH`, so the profile does not rely on it.
 4. **Hack Nerd Font** — registered under `HKCU`, no elevation needed.
@@ -107,6 +109,8 @@ Installs, in order:
 6. **The background** — copied to `%LOCALAPPDATA%\PwshShellSetup`, so Terminal
    never fetches an image over the network.
 7. **Windows Terminal settings** — merged into your existing file by default.
+   WSL profiles get the DarthAdmin scheme and background too, because the
+   Ubuntu and Debian packages ship their own colour scheme that would win.
    Comments in your original file are not preserved, which is why a
    timestamped `.bak-` copy is made first.
 
@@ -118,7 +122,9 @@ backups.
 Never installs anything, never touches the network at startup, never throws,
 and prints nothing on a normal start. A section that fails becomes a warning.
 
-- **Oh My Posh** with the `kali` theme, loaded from the local copy.
+- **Oh My Posh** with the `darthadmin` theme, loaded from the local copy: a
+  blue frame and red name normally; as Administrator the frame turns red, the
+  name goes bold and the prompt ends in `#`.
 - **PSReadLine** with ListView predictions from history *and* completions
   (CompletionPredictor), history search on the arrow keys, menu completion on
   Tab, and colours matched to the Terminal scheme.
@@ -218,7 +224,7 @@ Nerd Font. Check `profiles.defaults.font.face` is `Hack Nerd Font` and restart
 Terminal — running apps do not pick up newly installed fonts.
 
 **The prompt shows `CONFIG ERROR`.** The theme file is missing. Re-run the
-setup, or check `~\.config\oh-my-posh\kali.omp.json` exists.
+setup, or check `~\.config\oh-my-posh\darthadmin.omp.json` exists.
 
 **`oh-my-posh` is not recognised after setup.** Open a new tab.
 
