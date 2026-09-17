@@ -39,14 +39,17 @@ cd Powershell
 Or run it straight from the web:
 
 ```powershell
-irm https://raw.githubusercontent.com/TheDarthAdmin/Powershell/main/ShellSetup.ps1 | iex
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/TheDarthAdmin/Powershell/main/ShellSetup.ps1)))
 ```
 
-To pass options through the one-liner, wrap it in a script block:
+Options go after the closing parenthesis:
 
 ```powershell
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/TheDarthAdmin/Powershell/main/ShellSetup.ps1))) -InstallExtras
 ```
+
+The shorter `irm ... | iex` also works, but it cannot take options: the
+script notices it was piped into `iex` and re-runs itself in the form above.
 
 Restart Windows Terminal when it finishes.
 
